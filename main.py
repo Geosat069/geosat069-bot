@@ -1,4 +1,4 @@
-import os, sys, threading, traceback
+import os, sys, threading, traceback, asyncio
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -45,22 +45,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uy, me trabé. Intenta de nuevo")
 
 def run_bot_polling():
-    import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     print("Bot iniciado... Haciendo polling FIX 20.7", flush=True)
     try:
         application = Application.builder().token(BOT_TOKEN).build()
-        
-        # ... tus handlers aquí, deja todo igual ...
+
         application.add_handler(CommandHandler("start", start))
-        # etc
-        
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
         application.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"ERROR FATAL BOT: {e}", flush=True)
-        import traceback
         traceback.print_exc()
 
 if __name__ == '__main__':
