@@ -1,4 +1,4 @@
-import os, threading, traceback, requests, glob, datetime
+import os, threading, traceback, requests, glob, re, json, datetime
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -17,82 +17,93 @@ app = Flask(__name__)
 os.makedirs("docs", exist_ok=True)
 
 @app.route('/')
-def home(): return "Geosat069 REAL LST VIVO!"
+def home(): return "Geosat069 FUNCIONANDO V16"
 def run_web(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 def cargar_pdfs():
     txt=""
-    try:
-        for pdf in glob.glob("docs/*.pdf")[:2]:
+    for pdf in glob.glob("docs/*.pdf")[:5]:
+        try:
             if fitz:
                 doc=fitz.open(pdf)
-                for p in doc[:4]: txt+=p.get_text()[:2000]
-        return txt[:5000]
-    except: return ""
+                for p in doc[:5]: txt+=p.get_text()[:2500]
+        except: pass
+    return txt[:8000]
 
-def get_real_temp(lat, lon, year):
-    # Temperatura real del suelo usando Open-Meteo (archivo satelital ERA5)
-    try:
-        date = f"{year}-07-15" # mes seco en Cali para comparar
-        url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={date}&end_date={date}&daily=temperature_2m_max&timezone=auto"
-        r=requests.get(url,timeout=10).json()
-        temp=r['daily']['temperature_2m_max'][0]
-        return float(temp)
-    except:
-        return 30.5 if year==2020 else 32.8
+def get_datos_reales(lat, lon, years):
+    datos={}
+    for y in years:
+        try:
+            date=f"{y}-07-15"
+            url=f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={date}&end_date={date}&daily=temperature_2m_max,precipitation_sum,wind_speed_10m_max,relative_humidity_2m_mean,shortwave_radiation_sum&timezone=auto"
+            r=requests.get(url,timeout=12).json()['daily']
+            datos[y]={
+                "temp": r['temperature_2m_max'][0],
+                "precip": r['precipitation_sum'][0],
+                "viento": r['wind_speed_10m_max'][0],
+                "humedad": r['relative_humidity_2m_mean'][0],
+                "radiacion": r['shortwave_radiation_sum'][0]
+            }
+        except: pass
+    return datos
 
-def geocode(nombre):
+def geocode(q):
     try:
-        url = f"https://nominatim.openstreetmap.org/search?q={nombre}, Cali, Colombia&format=json&limit=1"
+        url=f"https://nominatim.openstreetmap.org/search?q={q}, Cali, Colombia&format=json&limit=1"
         r=requests.get(url,headers={"User-Agent":"Geosat069"},timeout=10).json()
-        if r:
-            lon=float(r[0]['lon']); lat=float(r[0]['lat'])
-            return [lon-0.05, lat-0.05, lon+0.05, lat+0.05], r[0]['display_name'], lat, lon
+        if r: return r[0]['display_name'], float(r[0]['lat']), float(r[0]['lon'])
     except: pass
-    return None, None, 3.45, -76.52
+    return q, 3.4419, -76.55
 
-def crear_imagen_vs_real(zona, t2020, t2026):
-    path="/tmp/vs_real.png"
-    fig, ax = plt.subplots(figsize=(7,4))
-    ax.bar(["2020 REAL", "2026 REAL"], [t2020, t2026], color=["#2ecc71","#e74c3c"], width=0.6)
-    ax.set_title(f"LST REAL Satelital - {zona}\n{t2020}°C vs {t2026}°C - EICU", fontsize=10, fontweight='bold')
-    ax.set_ylabel("Temp Max °C (ERA5/Landsat cal)")
-    plt.tight_layout()
-    plt.savefig(path, dpi=180)
-    plt.close()
-    return path
+def crear_imagen_auto(spec, lat, lon, path="/tmp/geosat.png"):
+    try:
+        if spec.get("type") == "map":
+            # Mapa satelital real
+            url = f"https://staticmap.openstreetmap.de/staticmap.php?center={lat},{lon}&zoom=14&size=800x600&markers={lat},{lon},red"
+            img_data = requests.get(url, timeout=15).content
+            open(path,'wb').write(img_data)
+            return path
+
+        plt.figure(figsize=(8,5))
+        t=spec.get("type","bar")
+        labels=spec.get("labels",[])
+        if t=="bar":
+            for ds in spec.get("datasets",[]):
+                plt.bar(labels, ds["data"], label=ds["label"], alpha=0.85)
+        elif t=="line":
+            for ds in spec.get("datasets",[]):
+                plt.plot(labels, ds["data"], marker='o', linewidth=2.5, label=ds["label"])
+        elif t=="pie":
+            plt.pie(spec["datasets"][0]["data"], labels=labels, autopct='%1.1f%%')
+
+        plt.title(spec.get("title","Comparativa Ambiental REAL"), fontweight='bold', fontsize=11)
+        plt.legend(); plt.tight_layout(); plt.savefig(path, dpi=220); plt.close()
+        return path
+    except Exception as e:
+        print("Error imagen", e)
+        return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Soy GEOSAT REAL. Ya leo tus PDFs, ya consulto temperatura real de satelite. Prueba: Pance 2020 vs 2026")
+    await update.message.reply_text("Soy GEOSAT el que te sirve. Pregúntame normal o pídeme con gráfica/imagen/mapa y te la hago.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto=update.message.text
     low=texto.lower()
     try:
-        bbox, nombre, lat, lon = geocode(texto.replace("2020","").replace("2026","").replace("vs","").strip()[:50])
-        pide_vs = "vs" in low
+        quiere_visual = any(k in low for k in ["grafic","grafico","imagen","foto","mapa","visual","muestrame","muéstrame","plot","chart","dibuja"])
 
-        if pide_vs:
-            t2020 = get_real_temp(lat, lon, 2020)
-            t2026 = get_real_temp(lat, lon, 2026)
-            img = crear_imagen_vs_real(nombre if nombre else texto[:25], t2020, t2026)
-            await update.message.reply_photo(photo=open(img,'rb'), caption=f"🌡️ LST REAL {nombre}\n2020: {t2020}°C\n2026: {t2026}°C\nΔ = {round(t2026-t2020,1)}°C\nFuente: ERA5/Open-Meteo (calibrado Landsat/Sentinel)")
-            return
+        years=[int(y) for y in re.findall(r'\b(20\d{2})\b', texto)]
+        if any(k in low for k in ["actual","hoy","ahora","este año"]): years.append(2026)
+        years=list(dict.fromkeys(years))[:4]
 
-        info_pdf=cargar_pdfs()
-        prompt=f"Eres GEOSAT JARVIS INGENIERO TOPOGRAFICO experto 20 años. QGIS, ArcGIS, Civil 3D, LIDAR, Sentinel. Contexto PDFs: {info_pdf[:3000]} Zona: {nombre}"
-        comp=client.chat.completions.create(model="openai/gpt-oss-20b", messages=[{"role":"system","content":prompt},{"role":"user","content":texto}], temperature=0.7, max_tokens=1500)
-        await update.message.reply_text(comp.choices[0].message.content)
-    except Exception as e:
-        print(e); traceback.print_exc()
-        await update.message.reply_text("Error, intenta de nuevo")
+        # Lugar
+        lugar_q = re.sub(r'20\d{2}|vs|comparacion|actual|hoy|grafica|imagen|mapa|con|dame|la|del|año', '', low).strip()
+        if not lugar_q: lugar_q="Pance, Cali"
+        nombre, lat, lon = geocode(lugar_q[:80])
 
-def run_bot_polling():
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.run_polling(drop_pending_updates=True)
+        datos_reales = get_datos_reales(lat, lon, years) if years else {}
+        pdfs = cargar_pdfs()
 
-if __name__ == '__main__':
-    threading.Thread(target=run_web, daemon=True).start()
-    run_bot_polling()
+        prompt = f"""
+        Eres GEOSAT JARVIS, ingeniero topográfico y geomático con 20 años de experiencia.
+        Experto en QGIS, ArcGIS Pro, Civil 3D, LIDAR, Sentinel,
