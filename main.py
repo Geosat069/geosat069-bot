@@ -40,7 +40,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if groq_client:
             completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b,
                 messages=[{"role": "user", "content": user_text}]
             )
             respuesta = completion.choices[0].message.content
