@@ -27,7 +27,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Me falta la API de GROQ")
             return
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": "Eres Geosat069, útil y amigable. Responde en español, corto."},
                 {"role": "user", "content": update.message.text}
