@@ -1,4 +1,3 @@
-python-telegram-bot
-supabase
-groq
-Flask
+python-telegram-bot==20.7
+groq==0.4.2
+Flask==2.3.3
