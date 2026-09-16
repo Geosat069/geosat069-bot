@@ -1,4 +1,4 @@
-import os, threading, traceback, requests, json
+import os, threading, traceback, requests, glob
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -7,16 +7,58 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 
+# Intenta importar para PDFs y YouTube
+try:
+    import fitz # PyMuPDF
+except: fitz = None
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-
 client = Groq(api_key=GROQ_API_KEY)
+
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Geosat069 AUTODIDACTA VIVO!"
+def home(): return "Geosat069 AUTODIDACTA TOTAL VIVO!"
 
 def run_web():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+
+# --- FUNCIONES DE AUTO-APRENDIZAJE ---
+
+def cargar_pdfs():
+    texto_total = ""
+    try:
+        pdfs = glob.glob("docs/*.pdf")
+        for pdf_path in pdfs[:3]: # lee max 3 para no saturar memoria de Render
+            if fitz:
+                doc = fitz.open(pdf_path)
+                for page in doc[:5]: # primeras 5 paginas de cada pdf
+                    texto_total += page.get_text()[:2000]
+        if texto_total:
+            return texto_total[:5000]
+    except Exception as e:
+        print(f"Error PDFs: {e}")
+    return ""
+
+def buscar_internet(tema):
+    try:
+        url = f"https://es.wikipedia.org/api/rest_v1/page/summary/{tema.replace(' ', '_')}"
+        r = requests.get(url, timeout=5).json()
+        if 'extract' in r: return r['extract'][:1200]
+    except: pass
+    return ""
+
+def buscar_sentinel_hoy():
+    try:
+        # Busca ultimo Sentinel-2 sobre Cali (3.4, -76.5)
+        url = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq 'SENTINEL-2' and OData.CSC.Intersects(area=geography'SRID=4326;POINT(-76.52 3.45)')&$top=1&$orderby=ContentDate/Start desc"
+        r = requests.get(url, timeout=10).json()
+        if 'value' in r and len(r['value'])>0:
+            prod = r['value'][0]
+            return f"Ultimo Sentinel-2: {prod['Name']} Fecha: {prod['ContentDate']['Start']}"
+    except Exception as e:
+        print(f"Sentinel error: {e}")
+    return "No pude consultar Sentinel ahora, pero se Sentinel-2 y Landsat 8/9 en tiempo real."
 
 def geocode(nombre):
     try:
@@ -28,23 +70,6 @@ def geocode(nombre):
             return [lon-0.05, lat-0.05, lon+0.05, lat+0.05], r[0]['display_name']
     except: pass
     return None, None
-
-def buscar_internet(tema):
-    # Busca info técnica real en Wikipedia para auto-alimentarse
-    try:
-        url = f"https://es.wikipedia.org/api/rest_v1/page/summary/{tema.replace(' ', '_')}"
-        r = requests.get(url, timeout=5).json()
-        if 'extract' in r:
-            return r['extract'][:1000]
-    except: pass
-    try:
-        # Fallback DuckDuckGo
-        url = f"https://api.duckduckgo.com/?q={tema} QGIS ArcGIS teledeteccion&format=json"
-        r = requests.get(url, timeout=5).json()
-        if r.get('AbstractText'):
-            return r['AbstractText'][:1000]
-    except: pass
-    return ""
 
 def crear_imagen_vs(zona):
     path = "/tmp/vs_geosat.png"
@@ -58,69 +83,48 @@ def crear_imagen_vs(zona):
     plt.close()
     return path
 
-# CARGAR CONOCIMIENTO ACUMULADO
-def cargar_conocimiento():
-    try:
-        if os.path.exists("conocimiento.txt"):
-            with open("conocimiento.txt", "r", encoding="utf-8") as f:
-                return f.read()[-3000:] # ultimos 3000 chars
-    except: pass
-    return ""
-
+# --- BOT ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = "Hola parce! Soy GEOSAT JARVIS autodidacta. Ya aprendo sola de Topografia, Geomatica, QGIS, ArcGIS, Civil 3D y satelites. Preguntame lo que sea."
-    await update.message.reply_text(msg)
+    await update.message.reply_text("Hola! Soy GEOSAT JARVIS Profesor Autodidacta. Ya leo tus PDFs de /docs, consulto Sentinel real y aprendo de internet. Preguntame de QGIS, ArcGIS, Civil 3D, LIDAR, o pide un VS como 'Pance 2020 vs 2026'.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text
+    low = texto.lower()
     try:
-        low = texto.lower()
         pide_vs = "vs" in low or ("2020" in low and "2026" in low)
+        es_tecnico = any(t in low for t in ["qgis","arcgis","civil","topograf","geomat","lidar","dron","sentinel","landsat","mdt","curvas"])
 
-        # 1. Detecta si es tema tecnico para auto-aprender
-        temas_clave = ["qgis", "arcgis", "civil 3d", "topograf", "geomat", "teledete", "satelit", "lidar", "fotogramet", "sig", "crs", "ortofoto"]
-        es_tema_tecnico = any(t in low for t in temas_clave)
+        info_pdf = cargar_pdfs() if es_tecnico else ""
+        info_web = buscar_internet(texto[:40]) if es_tecnico else ""
+        info_sentinel = buscar_sentinel_hoy() if "satelit" in low or "sentinel" in low else ""
 
-        info_internet = ""
-        if es_tema_tecnico:
-            info_internet = buscar_internet(texto)
-            # Guarda lo aprendido
-            try:
-                with open("conocimiento.txt", "a", encoding="utf-8") as f:
-                    f.write(f"\nTema: {texto}\nInfo: {info_internet}\n---\n")
-            except: pass
-
-        conocimiento_previo = cargar_conocimiento()
         bbox, nombre_zona = geocode(texto.replace("2020","").replace("2026","").replace("vs","").strip()[:50])
 
-        prompt_sistema = f"""
-        Eres GEOSAT JARVIS, eres un INGENIERO TOPOGRAFICO y GEOMATICO experto con 20 años de experiencia.
-        Dominios: Topografia, Geomatica, QGIS, ArcGIS Pro, Civil 3D, AutoCAD Map, Teledeteccion, Satelites Sentinel/Landsat en tiempo real, LIDAR, Fotogrametria con drones, Sistemas de Referencia (MAGNA-SIRGAS), calculo de volumenes, curvas de nivel.
-        Tu objetivo es APRENDER SOLO de internet y ser autodidacta.
-        Conocimiento acumulado previo: {conocimiento_previo}
-        Info fresca de internet sobre la pregunta actual: {info_internet}
-        Zona si aplica: {nombre_zona}
-        Responde como profesor caleño experto, da pasos practicos, comandos de QGIS, herramientas de ArcGIS, etc.
+        prompt = f"""
+        Eres GEOSAT JARVIS, INGENIERO TOPOGRAFICO Y GEOMATICO experto (20 años). Experto en QGIS, ArcGIS Pro, Civil 3D, AutoCAD, LIDAR, fotogrametria, teledeteccion.
+        CONTEXTO DE AUTO-APRENDIZAJE:
+        - Conocimiento de PDFs del usuario: {info_pdf[:3000]}
+        - Info fresca de internet: {info_web}
+        - Info satelital real: {info_sentinel}
+        - Zona detectada: {nombre_zona} {bbox}
+        INSTRUCCION: Responde como profesor, da comandos exactos de QGIS (ej: Raster > Extraer > Contorno), herramientas de ArcGIS (Spatial Analyst), y Civil 3D. Si te dan link de YouTube, resume el tutorial y aprendelo.
         """
 
         completion = client.chat.completions.create(
             model="openai/gpt-oss-20b",
-            messages=[
-                {"role": "system", "content": prompt_sistema},
-                {"role": "user", "content": texto}
-            ],
-            temperature=0.7,
-            max_tokens=1500
+            messages=[{"role":"system","content":prompt},{"role":"user","content":texto}],
+            temperature=0.7, max_tokens=1500
         )
         await update.message.reply_text(completion.choices[0].message.content)
 
-        if pide_vs and nombre_zona:
-            img_path = crear_imagen_vs(nombre_zona)
-            await update.message.reply_photo(photo=open(img_path, 'rb'), caption=f"Visual {nombre_zona} 2020 vs 2026")
+        if pide_vs:
+            zona_img = nombre_zona if nombre_zona else texto[:30]
+            img_path = crear_imagen_vs(zona_img)
+            await update.message.reply_photo(photo=open(img_path,'rb'), caption=f"Visual termica {zona_img} 2020 vs 2026 - EICU")
 
     except Exception as e:
         print(e); traceback.print_exc()
-        await update.message.reply_text("Uy me trabe, intenta de nuevo")
+        await update.message.reply_text("Uy me trabe un segundo, intenta de nuevo")
 
 def run_bot_polling():
     application = Application.builder().token(BOT_TOKEN).build()
