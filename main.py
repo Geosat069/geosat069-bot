@@ -66,8 +66,7 @@ def run_bot_polling():
         application.add_handler(CommandHandler("start", start))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         print("Bot de Telegram iniciado... Haciendo polling")
-        # Fix para Render (hilos)
-        application.run_polling(drop_pending_updates=True, stop_signals=None, close_loop=False)
+        application.run_polling(drop_pending_updates=True)
     except Exception as e:
         import traceback
         print(f"ERROR FATAL BOT: {e}")
