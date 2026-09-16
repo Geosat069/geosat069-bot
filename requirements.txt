@@ -3,3 +3,6 @@ groq
 flask
 requests
 schedule
+matplotlib
+numpy
+pillow
