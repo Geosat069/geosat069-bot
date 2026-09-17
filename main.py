@@ -65,9 +65,9 @@ async def handle_docs(update, context):
 async def handle_message(update, context):
     texto=update.message.text or ""
     low=texto.lower().strip()
-    if low in ["hola","buenas","hi","hey","ola","holaa","que tal","buenas noches","buenos dias"]:
-    await update.message.reply_text("¡Hola! 👋 ¿En qué te ayudo?")
-    return
+        if low in ["hola","buenas","hi","hey","ola","holaa","que tal","q mas","que mas"]:
+        await update.message.reply_text("Hola! Que mas? En que te ayudo?")
+        return
     try:
         quiere_visual = any(k in low for k in ["imagen","foto","grafica","visual","mapa"])
         if quiere_visual:
