@@ -54,7 +54,7 @@ def get_clima_real():
     except:
         pass
     return {2000:24.1,2001:24.3,2002:24.4,2003:24.5,2004:24.6,2005:24.4,2006:24.8,2007:24.9,2008:24.7,2009:25.0,2010:24.8,2011:24.9,2012:25.1,2013:25.3,2014:25.4,2015:25.6,2016:25.8,2017:25.5,2018:25.7,2019:25.9,2020:26.0,2021:25.8,2022:26.1,2023:26.3,2024:26.4,2025:26.5,2026:26.6}
-    def crear_foto_clima(datos, path="/tmp/cali.png"):
+ def crear_foto_clima(datos, path="/tmp/cali.png"):
     plt.close('all')
     ys=sorted(datos.keys())
     vals=[datos[y] for y in ys]
