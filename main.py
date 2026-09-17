@@ -4,7 +4,7 @@ try:
  matplotlib.use('Agg')
  import matplotlib.pyplot as plt
 except Exception as e:
- print(f"matplotlib no cargó: {e}")
+ print(f"matplotlib no cargo: {e}")
  plt=None
 
 from flask import Flask
@@ -19,18 +19,13 @@ except:
 BOT_TOKEN=os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
 GROQ_KEY=os.environ.get("GROQ_API_KEY")
 
-if not BOT_TOKEN:
- print("ERROR FATAL: No hay BOT_TOKEN en Render")
-if not GROQ_KEY:
- print("ERROR FATAL: No hay GROQ_API_KEY en Render")
-
 client=Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 app=Flask(__name__)
 os.makedirs("docs",exist_ok=True)
 
 @app.route('/')
 def home():
- return "Geosat V28.1 OK"
+ return "Geosat V28.2 FINAL TODO TERRENO OK"
 
 def run_web():
  app.run(host='0.0.0.0',port=int(os.environ.get("PORT",10000)))
@@ -77,7 +72,7 @@ def crear_foto_clima(datos,path="/tmp/cali.png"):
  vals=[datos[y] for y in ys]
  plt.figure(figsize=(12,6))
  plt.plot([str(y) for y in ys],vals,marker='o',color='#d62728')
- plt.title(f"Temperatura {ys[0]}-{ys[-1]}")
+ plt.title(f"Temperatura {ys[0]}-{ys[-1]} 1940-2026")
  plt.grid(True,alpha=0.3)
  plt.tight_layout()
  plt.savefig(path,dpi=200)
@@ -87,11 +82,14 @@ def crear_foto_clima(datos,path="/tmp/cali.png"):
 def buscar_imagen_real(q,path="/tmp/busqueda.jpg"):
  try:
   qq=urllib.parse.quote(q)
-  r=requests.get(f"https://source.unsplash.com/1024x1024/?{qq}",timeout=20,allow_redirects=True)
-  if r.ok and len(r.content)>10000:
-   open(path,'wb').write(r.content)
-   return path
- except: pass
+  headers={"User-Agent":"Mozilla/5.0"}
+  for url in [f"https://source.unsplash.com/1024x1024/?{qq}", f"https://loremflickr.com/1024/1024/{qq}"]:
+   r=requests.get(url,headers=headers,timeout=20,allow_redirects=True)
+   if r.ok and len(r.content)>10000:
+    open(path,'wb').write(r.content)
+    return path
+ except Exception as e:
+  print(e)
  return None
 
 def generar_imagen_ia(q,path="/tmp/generada.jpg"):
@@ -108,30 +106,40 @@ def generar_imagen_ia(q,path="/tmp/generada.jpg"):
 def llamar_groq(prompt, extra=""):
  pdfs=cargar_pdfs()
  web=buscar_web_real(prompt)
- sys=f"Eres Geosat V28.1 modelo openai/gpt-oss-20b, responde TODO tema, prefiere info 2024-2026. PDFs:{pdfs[:6000]} WEB:{web[:2000]} Extra:{extra}"
+ sys=f"Eres Geosat V28.2 modelo openai/gpt-oss-20b con web.run libre, responde TODO tema sin limite de año pero prefiere 2024-2026. PDFs:{pdfs[:6000]} WEB:{web[:2000]} Extra:{extra}"
  try:
+  # SIN tool_choice para que no de error 400
   c=client.chat.completions.create(model="openai/gpt-oss-20b",messages=[{"role":"system","content":sys},{"role":"user","content":prompt}],max_tokens=1000,temperature=0.45)
   return c.choices[0].message.content[:3800]
  except Exception as e:
   traceback.print_exc()
-  return f"Error Groq: {e}"
+  return f"Info sobre {prompt}: Error {e}"
 
 async def procesar_comando_universal(update, texto):
  low=texto.lower().strip()
- if low in ["hola","buenas","hi","hey","ola","q mas","que mas"]:
-  await update.message.reply_text("Hola! Que mas? En que te ayudo? 🌎")
+ if low in ["hola","buenas","hi","hey","ola","q mas","que mas","que hubo","buenos dias"]:
+  await update.message.reply_text("Hola! Que mas? En que te ayudo? 🌎 Soy Geosat V28.2")
   return
+
  quiere_visual=any(k in low for k in ["imagen","foto","grafica","gráfica","mapa","muestrame","dibuja","foto real","imagen real"])
- quiere_buscar="busca" in low or "foto real" in low
- es_clima="temperatura" in low or "era5" in low or low=="cali"
+ # CORRECCION: ahora detecta imagen real aunque no diga busca
+ quiere_buscar= any(k in low for k in ["busca","foto real","imagen real","imagen verdadera","foto verdadera"])
+ es_clima= ("temperatura" in low or "era5" in low or low=="cali") and not quiere_buscar
 
  if quiere_buscar and quiere_visual:
-  prompt=texto.lower().replace("busca imagen real de","").replace("busca imagen de","").replace("busca foto de","").replace("busca","").strip() or "Cali"
-  await update.message.reply_text(f"🔍 Buscando foto real de {prompt}...")
+  prompt=texto.lower().replace("busca imagen real de","").replace("buscar imagen real de","").replace("imagen real de","").replace("foto real de","").replace("busca imagen de","").replace("busca foto de","").replace("busca","").strip() or "Cali"
+  await update.message.reply_text(f"🔍 Buscando foto REAL de {prompt} en la red...")
   foto=buscar_imagen_real(prompt)
   if foto:
-   with open(foto,'rb') as f: await update.message.reply_photo(photo=f.read(),caption=f"Foto real de {prompt}")
+   with open(foto,'rb') as f:
+    await update.message.reply_photo(photo=f.read(),caption=f"Foto REAL de {prompt} - de internet")
    return
+  else:
+   await update.message.reply_text("No encontre foto real, genero una IA...")
+   foto=generar_imagen_ia(prompt)
+   if foto:
+    with open(foto,'rb') as f:
+     await update.message.reply_photo(photo=f.read(),caption=f"Imagen IA de {prompt}")
 
  if es_clima and quiere_visual:
   datos=get_clima_real()
@@ -143,7 +151,7 @@ async def procesar_comando_universal(update, texto):
   return
 
  if quiere_visual:
-  prompt=texto.lower().replace("genera imagen de","").replace("imagen de","").replace("foto de","").strip() or "paisaje"
+  prompt=texto.lower().replace("genera imagen de","").replace("generar imagen de","").replace("imagen de","").replace("foto de","").replace("crea imagen de","").strip() or "paisaje"
   await update.message.reply_text(f"🎨 Generando IA: {prompt}...")
   foto=generar_imagen_ia(prompt)
   if foto:
@@ -156,7 +164,7 @@ async def handle_docs(update,context):
  try:
   f=await update.message.document.get_file()
   await f.download_to_drive(f"docs/{update.message.document.file_name}")
-  await update.message.reply_text("PDF guardado ✅")
+  await update.message.reply_text(f"PDF {update.message.document.file_name} guardado y aprendido ✅")
  except Exception as e: await update.message.reply_text(str(e))
 
 async def handle_voice(update,context):
@@ -168,7 +176,10 @@ async def handle_voice(update,context):
   with open(ogg,"rb") as fd:
    tr=client.audio.transcriptions.create(model="whisper-large-v3",file=(ogg,fd.read()))
   texto=tr.text or ""
-  await update.message.reply_text(f"Entendi: {texto}")
+  if not texto:
+   await update.message.reply_text("No entendi el audio")
+   return
+  await update.message.reply_text(f"Entendi por voz: {texto}")
   await procesar_comando_universal(update, texto)
  except Exception as e:
   traceback.print_exc()
