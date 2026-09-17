@@ -24,15 +24,21 @@ app = Flask(__name__)
 def home():
     return f"Geosat V43 JARVIS SUPABASE VIVA - Modelo {MODELO_FIJO} - Admin {CHAT_ID_ADMIN}"
 
-# --- SUPABASE MEMORIA ETERNA ---
-def supa_guardar(nota):
+# --- SUPABASE MEMORIA ETERNA CORREGIDA PARA memoria_geosat ---
+def supa_guardar(nota, usuario_id=None):
     if not SUPA_URL or not SUPA_KEY:
+        print("Falta SUPABASE_URL o KEY")
         return
     try:
-        headers = {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}", "Content-Type": "application/json"}
-        data = {"nota": nota}
-        requests.post(f"{SUPA_URL}/rest/v1/memoria", headers=headers, json=data, timeout=10)
-        print(f"Memoria guardada: {nota[:50]}")
+        uid = str(usuario_id or CHAT_ID_ADMIN)
+        headers = {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}", "Content-Type": "application/json", "Prefer": "return=representation"}
+        data = {
+            "usuario_id": uid,
+            "mensaje": str(nota)[:1000],
+            "respuesta": "guardado auto"
+        }
+        r = requests.post(f"{SUPA_URL}/rest/v1/memoria_geosat", headers=headers, json=data, timeout=15)
+        print(f"INSERT REAL memoria_geosat: Status {r.status_code} Body {r.text[:300]} | Nota: {nota[:50]}")
     except Exception as e:
         print(f"Error guardando memoria: {e}")
 
@@ -41,9 +47,12 @@ def supa_leer():
         return "Memoria local, sin Supabase"
     try:
         headers = {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}"}
-        r = requests.get(f"{SUPA_URL}/rest/v1/memoria?select=nota&order=created_at.desc&limit=10", headers=headers, timeout=10).json()
+        url = f"{SUPA_URL}/rest/v1/memoria_geosat?select=mensaje&order=id.desc&limit=10"
+        resp = requests.get(url, headers=headers, timeout=15)
+        print(f"LEER memoria_geosat: {resp.status_code} {resp.text[:300]}")
+        r = resp.json()
         if isinstance(r, list) and len(r) > 0:
-            return " | ".join([x.get("nota","") for x in r])
+            return " | ".join([x.get("mensaje","") for x in r])
         return "Sin recuerdos aun"
     except Exception as e:
         print(f"Error leyendo memoria: {e}")
@@ -116,7 +125,6 @@ def loop_autonomo():
     while True:
         try:
             ahora = datetime.datetime.now(tz)
-            # BRIEFING 6AM
             if ahora.hour == 6 and ahora.minute < 5 and ULTIMO_BRIEFING!= ahora.date():
                 datos = f"Briefing 6am. Clima: {tool_clima()} Dolar: {tool_dolar()} Sismo ultimo: {get_sismo_real()} Memoria: {supa_leer()}"
                 texto = pensar(datos, es_briefing=True)
@@ -125,7 +133,6 @@ def loop_autonomo():
                 loop.run_until_complete(enviar_sola(msg))
                 ULTIMO_BRIEFING = ahora.date()
 
-            # SISMOS CADA 5 MIN
             s = get_sismo_real()
             if s:
                 if ULTIMO_SISMO_ID is None:
@@ -141,22 +148,23 @@ def loop_autonomo():
         except Exception as e:
             print(f"Error loop: {e}"); time.sleep(60)
 
-def cerebro(texto):
+def cerebro(texto, user_id=None):
     if "recuerda" in texto.lower():
-        supa_guardar(texto)
+        supa_guardar(texto, usuario_id=user_id)
         return f"Listo jefe, guardado para siempre en Supabase: '{texto}'"
     contexto = f"Clima {tool_clima()} Dolar {tool_dolar()} Memoria {supa_leer()} Usuario dijo: {texto}"
     return pensar(contexto)
 
 async def handle_message(update: Update, context):
     txt = update.message.text or ""
+    uid = update.effective_user.id
     if "mi id" in txt.lower():
-        await update.message.reply_text(f"Tu ID es {update.effective_user.id}")
+        await update.message.reply_text(f"Tu ID es {uid}")
         return
     if "memoria" in txt.lower() or "que recuerdas" in txt.lower():
         await update.message.reply_text(f"🧠 Lo que recuerdo:\n{supa_leer()[:3500]}")
         return
-    resp = cerebro(txt)
+    resp = cerebro(txt, user_id=uid)
     await update.message.reply_text(resp[:4000])
 
 def run_bot():
