@@ -1,7 +1,5 @@
-Flask
-python-telegram-bot==21.3
+flask
+python-telegram-bot==20.7
 groq
 requests
-matplotlib
-PyMuPDF
-httpx
+pytz
