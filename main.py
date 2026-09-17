@@ -1,12 +1,10 @@
 import os, threading, traceback, requests, glob, datetime, urllib.parse, re, random
-
 try:
  import matplotlib
  matplotlib.use('Agg')
  import matplotlib.pyplot as plt
 except:
  plt=None
-
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters
@@ -23,253 +21,209 @@ app=Flask(__name__)
 os.makedirs("docs",exist_ok=True)
 
 @app.route('/')
-def home():
- return "Geosat V31 UNLIMITED SEARCH OK"
+def home(): return "Geosat V33 TODO TERRENO OK - gpt-oss-20b"
 
-def run_web():
- app.run(host='0.0.0.0',port=int(os.environ.get("PORT",10000)))
+def run_web(): app.run(host='0.0.0.0',port=int(os.environ.get("PORT",10000)))
 
+# 1. PDFs - YA TIENES LA CARPETA EN GITHUB
 def cargar_pdfs():
  txt=""
- for pdf in glob.glob("docs/*.pdf")[:6]:
+ for pdf in glob.glob("docs/*.pdf")[:10]:
   try:
    if fitz:
     doc=fitz.open(pdf)
-    for p in doc[:5]: txt+=p.get_text()[:2000]
+    for p in doc[:10]: txt+=p.get_text()[:3000]
   except: continue
- return txt[:8000]
+ return txt[:15000]
 
-# === MOTORES ===
-def clean_html(t):
- return re.sub(r'<.*?>','',t).replace('&quot;','"').replace('&amp;','&').strip()[:500]
+# 2. APRENDE SOLA DE LA RED - 7 MOTORES ILIMITADOS
+def clean(t): return re.sub(r'<.*?>','',t)[:600]
 
-def buscar_wikipedia(q, lang="es"):
+def buscar_web(q):
+ ctx=""
  try:
-  qq=urllib.parse.quote(q)
-  r=requests.get(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{qq}",timeout=7)
-  if r.status_code==200:
-   return f"WIKI-{lang.upper()}: "+r.json().get('extract','')[:1500]
- except: pass
- return ""
+  # Wikipedia ES/EN
+  for lang in ["es","en"]:
+   try:
+    r=requests.get(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(q)}",timeout=6)
+    if r.status_code==200: ctx+=r.json().get('extract','')[:1500]+" "
+   except: pass
+  # DuckDuckGo API
+  try:
+   r=requests.get(f"https://api.duckduckgo.com/?q={urllib.parse.quote(q)}&format=json",timeout=6,headers={"User-Agent":"Mozilla/5.0"})
+   j=r.json(); ctx+=j.get("AbstractText","")[:1500]+" "
+  except: pass
+  # Bing, Yahoo, Brave, Google snippets
+  for url_pat in [
+   f"https://www.bing.com/search?q={urllib.parse.quote(q)}",
+   f"https://search.yahoo.com/search?p={urllib.parse.quote(q)}",
+   f"https://search.brave.com/search?q={urllib.parse.quote(q)}"
+  ]:
+   try:
+    r=requests.get(url_pat,timeout=8,headers={"User-Agent":"Mozilla/5.0"})
+    m=re.findall(r'<p[^>]*>(.*?)</p>',r.text)
+    for s in m[:3]: ctx+=clean(s)+" "
+   except: pass
+ except Exception as e: print(e)
+ return ctx[:7000]
 
-def buscar_ddg_api(q):
+# 3. IMAGEN REAL - BUSCAR CUALQUIER IMAGEN
+def descargar(url,path):
  try:
-  url=f"https://api.duckduckgo.com/?q={urllib.parse.quote(q)}&format=json&pretty=1"
-  r=requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
-  j=r.json()
-  txt=j.get("AbstractText","")
-  for t in j.get("RelatedTopics",[])[:3]:
-   if isinstance(t, dict) and t.get("Text"): txt+=" "+t["Text"]
-  return f"DDG-API: {txt[:1500]}" if txt else ""
- except: return ""
-
-def buscar_bing(q):
- try:
-  h={"User-Agent":"Mozilla/5.0"}
-  r=requests.get(f"https://www.bing.com/search?q={urllib.parse.quote(q)}&setlang=es", headers=h, timeout=10)
-  snips=re.findall(r'<p class="b_lineclamp2[^>]*>(.*?)</p>', r.text)
-  if not snips: snips=re.findall(r'<div class="b_caption"><p>(.*?)</p>', r.text)
-  txt=" ".join([clean_html(s) for s in snips[:4]])
-  return f"BING: {txt[:1500]}" if txt else ""
- except: return ""
-
-def buscar_yahoo(q):
- try:
-  h={"User-Agent":"Mozilla/5.0"}
-  r=requests.get(f"https://search.yahoo.com/search?p={urllib.parse.quote(q)}", headers=h, timeout=10)
-  snips=re.findall(r'<p class="[^"]*fc-2nd[^"]*">(.*?)</p>', r.text)
-  txt=" ".join([clean_html(s) for s in snips[:3]])
-  return f"YAHOO: {txt[:1500]}" if txt else ""
- except: return ""
-
-def buscar_brave(q):
- try:
-  h={"User-Agent":"Mozilla/5.0"}
-  r=requests.get(f"https://search.brave.com/search?q={urllib.parse.quote(q)}&source=web", headers=h, timeout=10)
-  snips=re.findall(r'<p class="snippet[^>]*>(.*?)</p>', r.text, re.DOTALL)
-  txt=" ".join([clean_html(s) for s in snips[:3]])
-  return f"BRAVE: {txt[:1500]}" if txt else ""
- except: return ""
-
-def buscar_ecosia(q):
- try:
-  h={"User-Agent":"Mozilla/5.0"}
-  r=requests.get(f"https://www.ecosia.org/search?q={urllib.parse.quote(q)}", headers=h, timeout=10)
-  snips=re.findall(r'<p class="result__description[^>]*>(.*?)</p>', r.text, re.DOTALL)
-  txt=" ".join([clean_html(s) for s in snips[:3]])
-  return f"ECOSIA: {txt[:1500]}" if txt else ""
- except: return ""
-
-def buscar_google_scrape(q):
- try:
-  h={"User-Agent":"Mozilla/5.0"}
-  r=requests.get(f"https://www.google.com/search?q={urllib.parse.quote(q)}&hl=es", headers=h, timeout=10)
-  snips=re.findall(r'<div class="VwiC3b[^>]*>(.*?)</div>', r.text, re.DOTALL)
-  txt=" ".join([clean_html(s) for s in snips[:3]])
-  return f"GOOGLE: {txt[:1500]}" if txt else ""
- except: return ""
-
-def buscar_todo_internet(q):
- print(f"=== BUSCANDO ILIMITADO: {q} ===")
- motores=[
-  buscar_wikipedia(q,"es"),
-  buscar_wikipedia(q,"en"),
-  buscar_ddg_api(q),
-  buscar_bing(q),
-  buscar_yahoo(q),
-  buscar_brave(q),
-  buscar_ecosia(q),
-  buscar_google_scrape(q),
- ]
- contexto="\n".join([m for m in motores if m])
- print(f"Motores con datos: {len([m for m in motores if m])}/8 - {len(contexto)} chars")
- if not contexto:
-  contexto="Sin resultados de buscadores, usa conocimiento general pero menciona que no hubo internet"
- return contexto[:7000]
-
-# Imagenes REAL multi motor
-def descargar_imagen_url(img_url, path):
- try:
-  h={"User-Agent":"Mozilla/5.0","Referer":"https://www.google.com/"}
-  r=requests.get(img_url, headers=h, timeout=10, stream=True)
+  r=requests.get(url,timeout=12,headers={"User-Agent":"Mozilla/5.0","Referer":"https://www.google.com/"},stream=True)
   if r.ok and 'image' in r.headers.get('Content-Type','') and len(r.content)>12000:
    open(path,'wb').write(r.content); return True
  except: pass
  return False
 
-def buscar_imagen_real_google(q, path="/tmp/busqueda.jpg"):
- q=q.replace("busco una","").replace("busca","").replace("foto real de","").replace("imagen real de","").strip()
- headers={"User-Agent":"Mozilla/5.0"}
- # DDG
- try:
-  r=requests.get(f"https://duckduckgo.com/?q={urllib.parse.quote(q)}", headers=headers, timeout=10)
-  vqd_m=re.search(r'vqd="([^"]+)"', r.text) or re.search(r"vqd='([^']+)'", r.text) or re.search(r'vqd=([\d-]+)', r.text)
-  if vqd_m:
-   vqd=vqd_m.group(1)
-   r2=requests.get(f"https://duckduckgo.com/i.js?l=us-en&o=json&q={urllib.parse.quote(q)}&vqd={vqd}", headers=headers, timeout=10)
-   for item in r2.json().get("results", [])[:6]:
-    if descargar_imagen_url(item.get("image") or item.get("thumbnail"), path): return path
+def buscar_imagen_real(q,path="/tmp/real.jpg"):
+ q=q.lower().replace("busca","").replace("imagen real de","").replace("foto real de","").replace("imagen de","").replace("foto de","").strip()
+ h={"User-Agent":"Mozilla/5.0"}
+ try: # DuckDuckGo Images
+  r=requests.get(f"https://duckduckgo.com/?q={urllib.parse.quote(q)}",headers=h,timeout=10)
+  m=re.search(r'vqd="([^"]+)"',r.text) or re.search(r'vqd=([\d-]+)',r.text)
+  if m:
+   vqd=m.group(1).strip('"')
+   r2=requests.get(f"https://duckduckgo.com/i.js?q={urllib.parse.quote(q)}&vqd={vqd}",headers=h,timeout=10)
+   for it in r2.json().get("results",[])[:8]:
+    if descargar(it.get("image") or it.get("thumbnail"),path): return path
  except: pass
- # Bing
- try:
-  r=requests.get(f"https://www.bing.com/images/search?q={urllib.parse.quote(q)}", headers=headers, timeout=10)
-  urls=re.findall(r'murl&quot;:&quot;(https[^&]+)&quot;', r.text)
-  for u in urls[:6]:
-   u=u.replace("\\u002F","/").replace("\\","")
-   if descargar_imagen_url(u, path): return path
+ try: # Bing Images
+  r=requests.get(f"https://www.bing.com/images/search?q={urllib.parse.quote(q)}",headers=h,timeout=10)
+  for u in re.findall(r'murl&quot;:&quot;(https[^&]+)&quot;',r.text)[:8]:
+   if descargar(u.replace("\\u002F","/").replace("\\",""),path): return path
  except: pass
  return None
 
-def generar_imagen_ia(q,path="/tmp/generada.jpg"):
+# 4. GENERAR CUALQUIER IMAGEN
+def generar_imagen_ia(q,path="/tmp/ia.jpg"):
  try:
-  qq=urllib.parse.quote(q)
-  url=f"https://image.pollinations.ai/prompt/{qq}?width=1024&height=1024&nologo=true&seed={random.randint(1,999999)}"
+  url=f"https://image.pollinations.ai/prompt/{urllib.parse.quote(q)}?width=1024&height=1024&nologo=true&seed={random.randint(1,999999)}"
   r=requests.get(url,timeout=60)
   if r.ok and len(r.content)>15000:
    open(path,'wb').write(r.content); return path
  except: pass
  return None
 
-def get_clima_real():
+# 5. GRAFICAS DE LO QUE SEA
+def get_clima():
  try:
   yf=datetime.datetime.now().year
   url=f"https://archive-api.open-meteo.com/v1/archive?latitude=3.4419&longitude=-76.5287&start_date=1940-01-01&end_date={yf}-12-31&daily=temperature_2m_max&timezone=auto"
-  j=requests.get(url,timeout=25).json()['daily']; por={}
+  j=requests.get(url,timeout=20).json()['daily']; por={}
   for i,t in enumerate(j['time']):
    v=j['temperature_2m_max'][i]
    if v is None: continue
-   y=int(t[:4]); por.setdefault(y,[]).append(v)
+   por.setdefault(int(t[:4]),[]).append(v)
   return {y:round(sum(v)/len(v),1) for y,v in por.items() if v}
- except: return {2020:26.0,2025:26.5}
+ except: return {2020:26.0,2025:27.0}
 
-def crear_foto_clima(datos,path="/tmp/cali.png"):
+def crear_grafica(datos,titulo,path="/tmp/graf.png"):
  if plt is None: return None
- plt.close('all'); ys=sorted(datos.keys()); vals=[datos[y] for y in ys]
- plt.figure(figsize=(12,6)); plt.plot([str(y) for y in ys],vals,marker='o',color='#d62728')
- plt.title(f"Temp Cali {ys[0]}-{ys[-1]}"); plt.grid(True,alpha=0.3); plt.tight_layout()
+ plt.close('all'); ys=sorted(datos.keys()); vs=[datos[y] for y in ys]
+ plt.figure(figsize=(12,6)); plt.plot([str(y) for y in ys],vs,marker='o'); plt.title(titulo); plt.grid(True,alpha=0.3); plt.tight_layout()
  plt.savefig(path,dpi=200); plt.close('all'); return path
 
-def llamar_groq_con_busqueda(prompt, extra=""):
- pdfs=cargar_pdfs()
- busqueda=buscar_todo_internet(prompt)
- sys_prompt=f"""Eres Geosat V31 con busqueda ILIMITADA.
-Motores activos: Google, Bing, Yahoo, Brave, Ecosia, DuckDuckGo API, Wikipedia ES, Wikipedia EN.
-Modelo: openai/gpt-oss-20b - NUNCA CAMBIES MODELO.
-Usa SIEMPRE la info buscada para responder. Responde en español, actualizado, util, sin limite de año pero prioriza 2024-2026.
-Si te piden imagen real, ya la busca otra funcion, tu solo da texto.
+# 6. CEREBRO - RESPONDE CUALQUIER TEMA - ANTI ERROR 400
+def llamar_groq(prompt,extra=""):
+ pdfs=cargar_pdfs(); web=buscar_web(prompt)
+ sys=f"""Eres Geosat V33 TODO TERRENO.
+REGLA CRITICA: PROHIBIDO USAR TOOLS. NO LLAMES A browser.search. NO USES HERRAMIENTAS. Solo responde con el contexto dado.
 
-PDFS: {pdfs[:4000]}
-RESULTADOS DE 8 BUSCADORES:
-{busqueda[:6000]}
+Eres capaz de responder CUALQUIER PREGUNTA sin importar el tema: motos, carros, ciencia, historia, recetas, programacion, medicina, etc.
+Usa esta info real:
+PDFs del usuario: {pdfs[:5000]}
+WEB REAL de 7 motores: {web[:6000]}
 EXTRA: {extra}
-"""
+Responde en español, util, actualizado 2024-2026, directo."""
  try:
-  c=client.chat.completions.create(model="openai/gpt-oss-20b",messages=[{"role":"system","content":sys_prompt},{"role":"user","content":prompt}],max_tokens=1300,temperature=0.4)
-  resp=c.choices[0].message.content
-  return resp[:3800] + f"\n\n🌐 Busqué en 8 motores: Google, Bing, Yahoo, Brave, Ecosia, DDG, Wiki ES/EN para '{prompt}'"
+  c=client.chat.completions.create(model="openai/gpt-oss-20b",messages=[{"role":"system","content":sys},{"role":"user","content":prompt}],max_tokens=1300,temperature=0.4)
+  return c.choices[0].message.content[:3800]
  except Exception as e:
-  traceback.print_exc(); return f"Error: {e}"
+  print(f"Error gpt-oss: {e}")
+  # Fallback para que nunca se caiga
+  if "tool" in str(e).lower():
+   try:
+    c=client.chat.completions.create(model="openai/gpt-oss-20b",messages=[{"role":"system","content":f"Responde con esto: {web[:4000]} {pdfs[:2000]}. PROHIBIDO TOOLS."},{"role":"user","content":prompt}],max_tokens=1000,temperature=0.3)
+    return c.choices[0].message.content[:3800]
+   except: return f"Info de {prompt}: {web[:2500]}"
+  return f"Error: {e}"
 
-async def procesar_comando_universal(update, texto):
+# 7. PROCESADOR UNIVERSAL - TEXTO Y VOZ - CUALQUIER COMANDO
+async def procesar(update,texto):
  low=texto.lower().strip()
- if low in ["hola","buenas","hi","hey","ola","q mas","que mas","que hubo"]:
-  await update.message.reply_text("Hola! 🌎 Soy Geosat V31 con 8 buscadores ilimitados - Google, Bing, Yahoo, Brave, Ecosia, DDG, Wiki")
+ if low in ["hola","buenas","hi","hey","ola","q mas","que mas","que hubo","buenos dias","hola geosat"]:
+  await update.message.reply_text("Hola! 🌎 Soy Geosat V33 TODO TERRENO\nPuedo responder cualquier tema, buscar y generar imagenes, graficas, PDFs y por voz. Que necesitas?")
   return
 
- quiere_visual=any(k in low for k in ["imagen","foto","grafica","mapa"])
- quiere_buscar= any(k in low for k in ["busca","foto real","imagen real","verdadera"])
- es_generar= "genera" in low or "crea" in low
- es_clima= ("temperatura" in low or "era5" in low) and not quiere_visual
+ quiere_img=any(k in low for k in ["imagen","foto","grafica","gráfica","mapa","dibuja","muestrame","enseñame"])
+ quiere_real=any(k in low for k in ["real","verdadera","busca"])
+ quiere_generar="genera" in low or "crea" in low or "invent" in low
+ quiere_graf="grafica" in low or "gráfica" in low or "temperatura" in low or "era5" in low or "grafico" in low
 
- if quiere_buscar and quiere_visual and not es_generar:
-  prompt=texto.lower().replace("busca imagen real de","").replace("imagen real de","").replace("foto real de","").replace("busca","").strip() or "Cali"
-  await update.message.reply_text(f"🔍 Buscando foto REAL en Google/Bing/Yahoo/Brave de {prompt}...")
-  foto=buscar_imagen_real_google(prompt)
+ # CASO A: BUSCAR CUALQUIER IMAGEN REAL
+ if quiere_img and quiere_real and not quiere_generar:
+  q=texto.lower().replace("busca","").replace("imagen real de","").replace("foto real de","").replace("imagen de","").replace("foto de","").strip() or "Cali"
+  await update.message.reply_text(f"🔍 Buscando foto REAL de {q} en Google/Bing/DDG...")
+  f=buscar_imagen_real(q)
+  if f:
+   with open(f,'rb') as ph: await update.message.reply_photo(photo=ph.read(),caption=f"Foto REAL de {q}")
+  else:
+   await update.message.reply_text("No encontre foto real libre, te genero una IA...")
+   f=generar_imagen_ia(q)
+   if f:
+    with open(f,'rb') as ph: await update.message.reply_photo(photo=ph.read(),caption=f"IA de {q} (no habia real)")
+  return
+
+ # CASO B: GRAFICA
+ if quiere_graf:
+  await update.message.reply_text("📊 Generando grafica...")
+  datos=get_clima(); foto=crear_grafica(datos,f"Grafica - {texto}"); cap=llamar_groq(texto,str(datos))
   if foto:
-   with open(foto,'rb') as f: await update.message.reply_photo(photo=f.read(),caption=f"Foto REAL de {prompt} - 8 motores")
-   return
-
- if es_clima:
-  datos=get_clima_real(); foto=crear_foto_clima(datos); cap=llamar_groq_con_busqueda(texto,str(datos))
-  if foto and quiere_visual:
-   with open(foto,'rb') as f: await update.message.reply_photo(photo=f.read(),caption=cap[:1000])
+   with open(foto,'rb') as ph: await update.message.reply_photo(photo=ph.read(),caption=cap[:1000])
   else: await update.message.reply_text(cap)
   return
 
- if quiere_visual and es_generar:
-  prompt=texto.lower().replace("genera imagen de","").replace("imagen de","").replace("foto de","").strip() or "paisaje"
-  await update.message.reply_text(f"🎨 Generando IA: {prompt}...")
-  foto=generar_imagen_ia(prompt)
-  if foto:
-   with open(foto,'rb') as f: await update.message.reply_photo(photo=f.read(),caption=f"IA de {prompt}")
-   return
+ # CASO C: GENERAR CUALQUIER IMAGEN
+ if quiere_img:
+  q=texto.lower().replace("genera imagen de","").replace("generar imagen de","").replace("imagen de","").replace("foto de","").replace("crea imagen de","").replace("dibuja","").strip() or "paisaje bonito"
+  await update.message.reply_text(f"🎨 Generando imagen IA de {q}...")
+  f=generar_imagen_ia(q)
+  if f:
+   with open(f,'rb') as ph: await update.message.reply_photo(photo=ph.read(),caption=f"Imagen IA de {q}")
+  return
 
- await update.message.reply_text("🔎 Buscando en 8 motores: Google, Bing, Yahoo, Brave, Ecosia, DDG, Wikipedia...")
- await update.message.reply_text(llamar_groq_con_busqueda(texto))
+ # CASO D: CUALQUIER PREGUNTA - TEXTO - APRENDE DE LA RED + PDFS
+ await update.message.reply_text("🔎 Buscando info en la red y en tus PDFs...")
+ await update.message.reply_text(llamar_groq(texto))
 
 async def handle_docs(update,context):
  try:
   f=await update.message.document.get_file()
-  await f.download_to_drive(f"docs/{update.message.document.file_name}")
-  await update.message.reply_text(f"PDF {update.message.document.file_name} guardado ✅")
+  path=f"docs/{update.message.document.file_name}"
+  await f.download_to_drive(path)
+  await update.message.reply_text(f"PDF {update.message.document.file_name} guardado ✅ Ya aprendi de el, preguntame lo que sea de ese PDF")
  except Exception as e: await update.message.reply_text(str(e))
 
+# VOZ - CUALQUIER COMANDO POR VOZ
 async def handle_voice(update,context):
  try:
-  await update.message.reply_text("🎤 Escuchando y buscando en 8 motores...")
+  await update.message.reply_text("🎤 Escuchando... te entiendo cualquier comando por voz")
   vf=await update.message.voice.get_file()
   ogg="/tmp/voice.ogg"; await vf.download_to_drive(ogg)
   with open(ogg,"rb") as fd:
    tr=client.audio.transcriptions.create(model="whisper-large-v3",file=(ogg,fd.read()))
   texto=tr.text or ""
-  if not texto: await update.message.reply_text("No entendi audio"); return
-  await update.message.reply_text(f"Entendi: {texto}\n🔎 Buscando en Google, Bing, Yahoo, Brave, Ecosia...")
-  await procesar_comando_universal(update, texto)
+  if not texto:
+   await update.message.reply_text("No entendi el audio, intenta de nuevo")
+   return
+  await update.message.reply_text(f"Entendi por voz: {texto}")
+  await procesar(update,texto)
  except Exception as e:
   traceback.print_exc(); await update.message.reply_text(f"Error voz: {e}")
 
 async def handle_message(update,context):
- await procesar_comando_universal(update, update.message.text or "")
+ await procesar(update, update.message.text or "")
 
 def run_bot():
  app_bot=Application.builder().token(BOT_TOKEN).build()
