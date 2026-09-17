@@ -94,7 +94,18 @@ async def handle_message(update, context):
         return
     try:
         quiere_visual=any(k in low for k in ["imagen","foto","grafica","visual","mapa"])
-        if quiere_visual:
+        es_clima=any(k in low for k in ["clima","temperatura","cali","cambio climatico","era5","precipitacion"])
+        
+        if quiere_visual and es_clima:
+            datos=get_clima_real()
+            foto=crear_foto(datos)
+            caption=llamar_groq(texto, datos)
+            with open(foto,'rb') as f:
+                await update.message.reply_photo(photo=f.read(), caption=caption[:900])
+            return
+        if quiere_visual and not es_clima:
+            await update.message.reply_text("Soy Geosat, solo genero visualizaciones de clima de Cali con datos ERA5. Si quieres clima di 'temperatura Cali con imagen'. Para un perro no tengo generador de imagenes, solo graficas cientificas.")
+            return
             datos=get_clima_real()
             foto=crear_foto(datos)
             caption=llamar_groq(texto, datos)
