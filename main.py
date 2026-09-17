@@ -48,7 +48,7 @@ def crear_foto(datos, path="/tmp/cali.png"):
     plt.xlabel("Año"); plt.ylabel("°C"); plt.xticks(rotation=45); plt.grid(True, alpha=0.3, linestyle='--')
     plt.tight_layout(); plt.savefig(path, dpi=280); plt.close('all')
     return path
-    def llamar_groq(prompt, datos):
+def llamar_groq(prompt, datos):
     sys = f"""Eres Geosat V24.3. REGLAS: La imagen YA FUE generada. NUNCA digas no puedo generar imagenes. NUNCA uses python. Solo analiza: {datos} Pregunta: {prompt}"""
     try:
         comp = client.chat.completions.create(model="openai/gpt-oss-20b", messages=[{"role":"system","content":sys}], temperature=0.3, max_tokens=400, tool_choice="none")
