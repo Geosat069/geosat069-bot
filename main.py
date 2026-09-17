@@ -1,4 +1,4 @@
-import os, threading, traceback, requests, glob, re, json, datetime, time, urllib.parse
+import os, threading, traceback, requests, glob, re, datetime, time
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -16,36 +16,33 @@ app = Flask(__name__)
 os.makedirs("docs", exist_ok=True)
 
 @app.route('/')
-def home(): return "Geosat V23.1 Hola FIX OK"
+def home(): return "Geosat V24 REAL ERA5 OK"
 def run_web(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 def cargar_pdfs():
     txt=""
-    for pdf in glob.glob("docs/*.pdf")[:8]:
+    for pdf in glob.glob("docs/*.pdf")[:6]:
         try:
             if fitz:
                 doc=fitz.open(pdf)
-                for p in doc[:8]: txt+=p.get_text()[:3000]
+                for p in doc[:6]: txt+=p.get_text()[:2500]
         except: continue
-    return txt[:12000]
+    return txt[:10000]
 
 def expandir_anos(t):
-    low=t.lower(); actual=datetime.datetime.now().year
-    m=re.search(r'desde\s+(\d{4}).*?(?:hasta|al|a)\s+(\d{4}|actual)', low)
-    if m:
-        ini=int(m.group(1)); fin=actual if not m.group(2).isdigit() else int(m.group(2))
-        return list(range(max(ini,1940), fin+1))
-    if "actual" in low:
-        anos=[int(y) for y in re.findall(r'\b(19\d{2}|20\d{2})\b', t)]
-        if anos: return list(range(max(anos[0],1940), actual+1))
-    return [int(y) for y in re.findall(r'\b(20\d{2})\b', t)]
+    actual=datetime.datetime.now().year
+    m=re.search(r'2000.*?(?:hasta|actual)', t.lower())
+    if m: return list(range(2000, actual+1))
+    anos=[int(y) for y in re.findall(r'\b(20\d{2})\b', t)]
+    if anos and "actual" in t.lower(): return list(range(min(anos), actual+1))
+    if anos: return anos
+    return list(range(2000, actual+1))
 
-def get_clima(lat, lon, years):
-    if not years: return {}
+def get_clima_real(lat, lon, years):
     ini=max(min(years),1940); fin=max(years)
     try:
         url=f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={ini}-01-01&end_date={fin}-12-31&daily=temperature_2m_max&timezone=auto"
-        j=requests.get(url,timeout=25).json()['daily']
+        j=requests.get(url,timeout=30).json()['daily']
         por={}
         for i in range(len(j['time'])):
             try:
@@ -54,29 +51,23 @@ def get_clima(lat, lon, years):
                 por.setdefault(y,[]).append(v)
             except: continue
         return {y: round(sum(v)/len(v),1) for y,v in por.items() if v}
-    except: return {}
+    except Exception as e:
+        print(f"Clima error {e}")
+        return {}
 
-def geocode(q):
-    if len(q.strip())<3: q="Cali"
-    try:
-        r=requests.get(f"https://nominatim.openstreetmap.org/search?q={q}&format=json&limit=1", headers={"User-Agent":"GeosatV23"}, timeout=10).json()
-        if r: return r[0]['display_name'], float(r[0]['lat']), float(r[0]['lon'])
-    except: pass
-    return "Cali, Colombia", 3.4419, -76.5287
-
-def crear_grafica(datos, titulo, path="/tmp/g.png"):
-    try:
-        plt.close('all')
-        ys=sorted(datos.keys()); vals=[datos[y] for y in ys]
-        plt.figure(figsize=(13,6.5))
-        plt.plot([str(y) for y in ys], vals, marker='o', linewidth=2.8, color='#0a58ca')
-        plt.title(titulo, fontweight='bold'); plt.xlabel("Año"); plt.ylabel("°C")
-        plt.xticks(rotation=45, fontsize=8); plt.grid(True, alpha=0.25, linestyle='--')
-        plt.tight_layout(); plt.savefig(path, dpi=250); plt.close('all')
-        time.sleep(0.3)
-        return path
-    except:
-        plt.close('all'); return None
+def crear_foto_real(datos, titulo, path="/tmp/cali.png"):
+    plt.close('all')
+    ys=sorted(datos.keys()); vals=[datos[y] for y in ys]
+    plt.figure(figsize=(14,7))
+    plt.plot([str(y) for y in ys], vals, marker='o', linewidth=3, color='#d62728')
+    plt.title(titulo, fontsize=14, fontweight='bold')
+    plt.xlabel("Año"); plt.ylabel("Temp media anual °C")
+    plt.xticks(rotation=45); plt.grid(True, alpha=0.3, linestyle='--')
+    # Anota el valor real encima
+    for x,y in zip([str(y) for y in ys], vals):
+        plt.text(x, y, str(y), fontsize=7, ha='center', va='bottom')
+    plt.tight_layout(); plt.savefig(path, dpi=280); plt.close('all')
+    return path
 
 async def handle_docs(update, context):
     f=await update.message.document.get_file()
@@ -84,51 +75,39 @@ async def handle_docs(update, context):
     await update.message.reply_text(f"Guardado {update.message.document.file_name}")
 
 async def handle_message(update, context):
-    texto=update.message.text
-    if not texto: return
-    low=texto.lower().strip()
-
-    # FIX HOLA - no llames a Groq para saludos
-    if low in ["hola","buenas","hi","hey","ola","holaa"]:
-        await update.message.reply_text("¡Hola! Soy Geosat V23. Pregúntame lo que sea y si quieres gráfica dime 'con gráfica' o 'con imagen'. Ej: temperatura de Cali desde 2000 hasta actual con grafica")
+    texto=update.message.text or ""
+    low=texto.lower()
+    if low in ["hola","buenas","hi"]:
+        await update.message.reply_text("Hola! Soy Geosat V24. Dime 'temperatura Cali 2000 hasta actual con imagen' y te mando la foto real ERA5.")
         return
 
     try:
-        quiere_visual = any(k in low for k in ["grafic","imagen","foto","visual","mapa","chart","plot"])
-        years=expandir_anos(texto)
-        if quiere_visual and not years and "cali" in low: years=list(range(2000, datetime.datetime.now().year+1))
+        quiere_visual = any(k in low for k in ["imagen","foto","grafica","gráfica","visual"])
+        years = expandir_anos(texto)
+        print(f"Years detectados: {years}")
 
-        nombre, lat, lon = geocode(re.sub(r'desde|hasta|actual|grafica|con|temperatura','', low))
-        datos = get_clima(lat, lon, years) if years else {}
-        pdfs = cargar_pdfs()
+        # 1. PRIMERO saca datos reales, sin llamar al LLM
+        datos_reales = get_clima_real(3.4419, -76.5287, years)
+        print(f"Datos reales: {datos_reales}")
 
-        # PROMPT BLINDADO - PROHIBIDO HABLAR DE JSON
-        sys_prompt=f"""
-        Eres GEOSAT, asistente experto en TODO (topografia, ingenieria, qgis, programacion, cualquier tema).
-        REGLAS OBLIGATORIAS:
-        - Nunca hables de JSON, nunca digas CHART_JSON, nunca pidas formato de grafico.
-        - Nunca digas "puedo generar el JSON".
-        - Si te piden hola, saluda normal.
-        - Si te piden grafica de temperatura, yo la genero con datos reales, tu solo explica el analisis.
-        - Responde siempre directo, sin explicar tu funcionamiento interno.
-        Datos clima reales: {datos}
-        PDFs: {pdfs[:6000]}
-        Pregunta usuario: {texto}
-        """
+        # 2. Si pide imagen y tenemos datos, MANDA FOTO DIRECTO
+        if quiere_visual and datos_reales:
+            foto = crear_foto_real(datos_reales, f"Temperatura media anual Cali {min(datos_reales)}-{max(datos_reales)} - ERA5 Real")
+            pdfs = cargar_pdfs()
+            # Ahora si llama al LLM solo para el texto que acompaña la foto
+            prompt = f"Eres GEOSAT. Analiza estos datos REALES de Cali ERA5: {datos_reales}. No inventes otros. Tendencia: {datos_reales}. PDFs: {pdfs[:3000]}. Pregunta: {texto}. Explica tendencia en 3 lineas, sin tabla."
+            comp = client.chat.completions.create(model="openai/gpt-oss-20b", messages=[{"role":"system","content":prompt}], temperature=0.5, max_tokens=600)
+            caption = comp.choices[0].message.content[:900]
 
-        comp=client.chat.completions.create(model="openai/gpt-oss-20b", messages=[{"role":"system","content":sys_prompt}], temperature=0.7, max_tokens=1500)
-        resp=comp.choices[0].message.content
-        resp=re.sub(r'CHART_JSON.*','', resp, flags=re.DOTALL)
-        resp=re.sub(r'```json.*?```','', resp, flags=re.DOTALL).strip()
+            with open(foto,'rb') as f:
+                await update.message.reply_photo(photo=f.read(), caption=caption)
+            return
 
-        if quiere_visual and datos:
-            img=crear_grafica(datos, f"Temperatura {nombre} {min(datos)}-{max(datos)}")
-            if img:
-                with open(img,'rb') as f:
-                    await update.message.reply_photo(photo=f.read(), caption=resp[:900])
-                return
-
-        await update.message.reply_text(resp[:4000])
+        # Si no pide visual, respuesta normal
+        pdfs=cargar_pdfs()
+        prompt=f"Eres Geosat. Responde cualquier tema. Datos reales: {datos_reales} PDFs: {pdfs[:5000]} Pregunta: {texto}"
+        comp=client.chat.completions.create(model="openai/gpt-oss-20b", messages=[{"role":"system","content":prompt}], temperature=0.7, max_tokens=1500)
+        await update.message.reply_text(comp.choices[0].message.content[:4000])
 
     except Exception as e:
         traceback.print_exc()
