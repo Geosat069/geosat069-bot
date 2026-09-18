@@ -1,6 +1,7 @@
-flask
-python-telegram-bot==20.7
+edge-tts
+gTTS
 groq
+python-telegram-bot
+flask
 requests
 pytz
-gTTS
