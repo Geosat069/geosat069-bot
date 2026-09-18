@@ -17,7 +17,6 @@ SUPA_KEY = os.environ.get("SUPABASE_KEY")
 
 VOZ_GEOSAT = "es-MX-JorgeNeural"
 ULTIMO_SISMO_ID = None
-ULTIMO_BRIEFING = None
 app_bot_global = None
 ULTIMOS_MENSAJES = {}
 
@@ -26,13 +25,12 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Geosat V101 - Vivo"
+    return "Geosat V110 - Jarvis Search ON"
 
 def supa_guardar(mensaje_usuario, respuesta_bot="ok", usuario_id=None):
     if not SUPA_URL or not SUPA_KEY: return
-    # FIX: No guardes holas, saludos cortos
     if len(mensaje_usuario.strip()) < 6: return
-    if mensaje_usuario.lower().strip() in ["hola","habla","como estas","como estas?","hola, cómo estás?"]: return
+    if mensaje_usuario.lower().strip() in ["hola","habla","como estas","como estas?"]: return
     try:
         uid = str(usuario_id or CHAT_ID_ADMIN)
         headers = {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}", "Content-Type": "application/json", "Prefer": "return=representation"}
@@ -46,9 +44,8 @@ def supa_leer():
         headers = {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}"}
         r = requests.get(f"{SUPA_URL}/rest/v1/memoria_geosat?select=mensaje&order=id.desc&limit=20", headers=headers, timeout=10).json()
         if not isinstance(r, list): return "Sin recuerdos"
-        # FIX: Solo memoria importante, ignora holas
         filtrada = [x.get('mensaje','') for x in r if len(x.get('mensaje','')) > 12 and "hola" not in x.get('mensaje','').lower()[:10]]
-        if not filtrada: return "Sin datos importantes guardados"
+        if not filtrada: return "Sin datos importantes"
         return " | ".join(filtrada[:5])
     except: return "Sin recuerdos"
 
@@ -67,6 +64,26 @@ def tool_dolar():
         r = requests.get("https://api.dolarapi.com/v1/dolares/co/oficial", timeout=10).json()
         return f"${r['compra']} COP" if r.get("compra") else "~$4100"
     except: return "~$4100"
+
+# --- NUEVO JARVIS: BUSCADOR REAL ---
+def tool_google_real(query):
+    try:
+        # DuckDuckGo lite no pide API key
+        url = f"https://lite.duckduckgo.com/lite/?q={urllib.parse.quote(query)}"
+        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12).text
+        snippets = re.findall(r'class="result-snippet"[^>]*>(.*?)</td>', html, re.DOTALL)[:3]
+        limpios = [re.sub('<[^<]+?>', '', s).strip() for s in snippets]
+        limpios = [s for s in limpios if len(s) > 15]
+        if not limpios:
+            return "No encontré datos recientes, respondo con conocimiento base."
+        return "INFO REAL INTERNET: " + " | ".join(limpios)
+    except Exception as e:
+        return f"No pude buscar: {e}"
+
+def necesita_busqueda(texto):
+    t = texto.lower()
+    palabras = ["hoy","ahora","actual","precio","cuanto vale","quien gano","resultado","noticias","ultimo","ayer","dolar hoy","clima hoy","bitcoin","america","cali","petro","farc"]
+    return any(p in t for p in palabras)
 
 def get_sismo_real():
     try:
@@ -87,12 +104,11 @@ def tool_ver_imagen_url(image_url, pregunta="Describe que ves corto"):
         return c.choices[0].message.content
     except Exception as e: return f"Error vision {e}"
 
-def pensar(contexto, es_briefing=False):
+def pensar(contexto, info_internet=""):
     memoria = supa_leer()
-    # FIX: Ya no le digo que repita la memoria textual
-    sys_prompt = f"Eres GEOSAT V101, satelite de Cali, grave, leal, tecnico, paisa. No repitas la memoria. Usa memoria solo si aporta. Hora: {datetime.datetime.now(pytz.timezone('America/Bogota')).strftime('%d %B %H:%M')} Info interna (no la listes): {memoria}. Responde variado, no siempre 'Hola, sistema operativo activo'."
+    sys_prompt = f"Eres GEOSAT V110, satelite de Cali, grave, leal, tecnico. Hora Bogota: {datetime.datetime.now(pytz.timezone('America/Bogota')).strftime('%d %B %H:%M')} Memoria relevante: {memoria}. {info_internet} Si hay INFO REAL INTERNET, usala y citela. No inventes. No repitas la memoria textual."
     try:
-        c = client.chat.completions.create(model=MODELO_FIJO, messages=[{"role":"system","content":sys_prompt},{"role":"user","content":contexto}], max_tokens=500, temperature=0.7)
+        c = client.chat.completions.create(model=MODELO_FIJO, messages=[{"role":"system","content":sys_prompt},{"role":"user","content":contexto}], max_tokens=600, temperature=0.5)
         return c.choices[0].message.content
     except Exception as e: return f"Error Groq: {e}"
 
@@ -101,22 +117,12 @@ async def enviar_voz(chat_id, texto):
         texto_corto = texto[:280].replace("*","").replace("_","").replace("#","").strip()
         if not texto_corto: return
         import edge_tts
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-            temp_path = fp.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp: temp_path = fp.name
         communicate = edge_tts.Communicate(texto_corto, VOZ_GEOSAT, rate="-8%", pitch="-15Hz")
         await communicate.save(temp_path)
-        with open(temp_path, 'rb') as f:
-            await app_bot_global.bot.send_voice(chat_id=chat_id, voice=f)
+        with open(temp_path, 'rb') as f: await app_bot_global.bot.send_voice(chat_id=chat_id, voice=f)
         os.unlink(temp_path)
-    except Exception as e:
-        print(f"Error voz {e}")
-        try:
-            tts = gTTS(text=texto_corto, lang='es', slow=False, tld='com.mx')
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp: temp_path = fp.name
-            tts.save(temp_path)
-            with open(temp_path, 'rb') as f: await app_bot_global.bot.send_voice(chat_id=chat_id, voice=f)
-            os.unlink(temp_path)
-        except: pass
+    except: pass
 
 async def enviar_sola(mensaje, con_voz=False):
     if app_bot_global and CHAT_ID_ADMIN:
@@ -126,42 +132,36 @@ async def enviar_sola(mensaje, con_voz=False):
         except: pass
 
 def loop_autonomo():
-    global ULTIMO_SISMO_ID, ULTIMO_BRIEFING
-    print("GEOSAT V101 DESPERTO")
+    global ULTIMO_SISMO_ID
     tz = pytz.timezone('America/Bogota')
     time.sleep(15)
     while True:
         try:
-            ahora = datetime.datetime.now(tz)
-            if ahora.hour == 6 and ahora.minute < 5 and ULTIMO_BRIEFING!= ahora.date():
-                datos = f"Briefing 6am Clima {tool_clima()} Dolar {tool_dolar()}"
-                texto = pensar(datos, es_briefing=True)
-                loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-                loop.run_until_complete(enviar_sola(f"☀️ BUENOS DIAS JEFE - GEOSAT 6AM\n\n{texto}", con_voz=True))
-                ULTIMO_BRIEFING = ahora.date()
             s = get_sismo_real()
             if s and ULTIMO_SISMO_ID and s["id"]!= ULTIMO_SISMO_ID and s["mag"] >= 3.0:
                 ULTIMO_SISMO_ID = s["id"]
-                analisis = pensar(f"ALERTA SISMO Mag {s['mag']} {s['lugar']} {s['hora']}")
+                analisis = pensar(f"ALERTA SISMO Mag {s['mag']} {s['lugar']}")
                 loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-                loop.run_until_complete(enviar_sola(f"🚨 GEOSAT SISMO Mag {s['mag']} {s['lugar']} {s['hora']}\n\n{analisis}", con_voz=True))
+                loop.run_until_complete(enviar_sola(f"🚨 GEOSAT SISMO Mag {s['mag']} {s['lugar']}\n\n{analisis}", con_voz=True))
             if ULTIMO_SISMO_ID is None and s: ULTIMO_SISMO_ID = s["id"]
             time.sleep(30)
-        except Exception as e:
-            print(f"Error loop {e}"); time.sleep(60)
+        except: time.sleep(60)
 
 def cerebro(texto, user_id=None):
-    # FIX: Si es solo saludo, no uses Groq, responde directo variado
     t = texto.lower().strip()
     if t in ["hola","hola.","hola geosat"]:
         import random
-        saludos = ["Hola jefe, Geosat operativo al 100%. ¿Qué necesita?", "Aquí Geosat, señor. Sistemas en línea.", "Hola jefe, listo. ¿En qué le ayudo?"]
-        return random.choice(saludos)
+        return random.choice(["Hola jefe, Geosat operativo al 100%. ¿Qué necesita?", "Aquí Geosat, señor. Sistemas en línea.", "Hola jefe, listo. ¿En qué le ayudo?"])
     if "recuerda" in t:
-        r = f"Guardado en memoria Geosat: '{texto}'"
+        r = f"Guardado: '{texto}'"
         supa_guardar(texto, r, usuario_id=user_id); return r
+
+    info_web = ""
+    if necesita_busqueda(texto):
+        info_web = tool_google_real(texto)
+
     contexto = f"Clima {tool_clima()} Dolar {tool_dolar()} Usuario: {texto}"
-    resp = pensar(contexto)
+    resp = pensar(contexto, info_web)
     supa_guardar(texto, resp, usuario_id=user_id); return resp
 
 async def handle_message(update: Update, context):
@@ -202,12 +202,11 @@ async def handle_message(update: Update, context):
 
     if "mi id" in txt.lower(): await update.message.reply_text(f"Tu ID {uid}"); return
     if "borra memoria" in txt.lower():
-        supa_guardar("RESET MEMORIA", "reset", usuario_id=uid)
-        await update.message.reply_text("🧠 Memoria filtrada. Ya no repetiré los Hola."); return
+        supa_guardar("RESET", "reset", usuario_id=uid)
+        await update.message.reply_text("🧠 Memoria filtrada."); return
 
     resp = cerebro(txt, user_id=uid)
     await update.message.reply_text(resp[:4000])
-    # Solo voz si es saludo o lo pides
     if any(k in txt.lower() for k in ["voz","habla","audio"]) or txt.lower().strip() == "hola":
         await enviar_voz(update.effective_chat.id, resp[:250])
 
@@ -217,7 +216,7 @@ def run_bot():
     app_bot_global.add_handler(MessageHandler(filters.ALL, handle_message))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     threading.Thread(target=loop_autonomo, daemon=True).start()
-    print("GEOSAT V101 FINAL iniciado")
+    print("GEOSAT V110 iniciado")
     app_bot_global.run_polling(drop_pending_updates=True, allowed_updates=["message"])
 
 if __name__ == '__main__':
