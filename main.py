@@ -22,37 +22,51 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Geosat V43 JARVIS SUPABASE VIVA - Modelo {MODELO_FIJO} - Admin {CHAT_ID_ADMIN}"
+    return f"Geosat V44 JARVIS MEMORIA AUTO VIVA - Modelo {MODELO_FIJO}"
 
-# --- SUPABASE MEMORIA ETERNA CORREGIDA PARA memoria_geosat ---
-def supa_guardar(nota, usuario_id=None):
+# --- SUPABASE MEMORIA ETERNA AUTOMATICA ---
+def supa_guardar(mensaje_usuario, respuesta_bot="guardado auto", usuario_id=None):
     if not SUPA_URL or not SUPA_KEY:
         print("Falta SUPABASE_URL o KEY")
         return
     try:
         uid = str(usuario_id or CHAT_ID_ADMIN)
-        headers = {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}", "Content-Type": "application/json", "Prefer": "return=representation"}
+        headers = {
+            "apikey": SUPA_KEY,
+            "Authorization": f"Bearer {SUPA_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
         data = {
             "usuario_id": uid,
-            "mensaje": str(nota)[:1000],
-            "respuesta": "guardado auto"
+            "mensaje": str(mensaje_usuario)[:1000],
+            "respuesta": str(respuesta_bot)[:1000]
         }
         r = requests.post(f"{SUPA_URL}/rest/v1/memoria_geosat", headers=headers, json=data, timeout=15)
-        print(f"INSERT REAL memoria_geosat: Status {r.status_code} Body {r.text[:300]} | Nota: {nota[:50]}")
+        print(f"MEMORIA AUTO GUARDADA Status {r.status_code}")
     except Exception as e:
-        print(f"Error guardando memoria: {e}")
+        print(f"Error memoria auto: {e}")
 
 def supa_leer():
     if not SUPA_URL or not SUPA_KEY:
         return "Memoria local, sin Supabase"
     try:
         headers = {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}"}
-        url = f"{SUPA_URL}/rest/v1/memoria_geosat?select=mensaje&order=id.desc&limit=10"
+        url = f"{SUPA_URL}/rest/v1/memoria_geosat?select=mensaje,respuesta&order=id.desc&limit=15"
         resp = requests.get(url, headers=headers, timeout=15)
-        print(f"LEER memoria_geosat: {resp.status_code} {resp.text[:300]}")
         r = resp.json()
         if isinstance(r, list) and len(r) > 0:
-            return " | ".join([x.get("mensaje","") for x in r])
+            recuerdos = []
+            for x in r:
+                m = x.get("mensaje","")
+                # Prioriza lo importante
+                if "recuerda" in m.lower() or "jefe" in m.lower() or "soy" in m.lower():
+                    recuerdos.append(f"[IMPORTANTE] {m}")
+            # Si hay importantes, devuelvelos primero
+            if recuerdos:
+                return " | ".join(recuerdos[:8])
+            # Si no, historial normal
+            return " | ".join([f"User: {x.get('mensaje','')[:80]}" for x in r[:6]])
         return "Sin recuerdos aun"
     except Exception as e:
         print(f"Error leyendo memoria: {e}")
@@ -96,12 +110,12 @@ def get_sismo_real():
 
 def pensar(contexto, es_briefing=False):
     memoria = supa_leer()
-    sys_prompt = f"""Eres JARVIS V43 de Cali, asistente personal autonomo. Vives sola.
+    sys_prompt = f"""Eres JARVIS V44 de Cali, asistente personal autonomo. Vives sola.
 MEMORIA ETERNA DE TU JEFE (Supabase): {memoria}
 CONTEXTO REAL: {contexto}
 Hora Bogota: {datetime.datetime.now(pytz.timezone('America/Bogota')).strftime('%d %B %Y %H:%M')}
 MODELO FIJO OBLIGATORIO: {MODELO_FIJO}
-Instrucciones: {'Genera briefing 6am proactivo, cariñoso, tecnico, 4 lineas' if es_briefing else 'Responde paisa, tecnico, corto. Si es sismo genera alerta. Nunca digas no tengo datos, usa el contexto real'}
+Instrucciones: {'Genera briefing 6am proactivo, cariñoso, tecnico, 4 lineas usando la memoria' if es_briefing else 'Responde paisa, tecnico, corto. Usa la memoria eterna para personalizar. Si es sismo genera alerta. Nunca digas no tengo datos, usa el contexto real'}
 """
     try:
         c = client.chat.completions.create(model=MODELO_FIJO, messages=[{"role":"system","content":sys_prompt},{"role":"user","content":contexto}], max_tokens=800, temperature=0.4)
@@ -119,7 +133,7 @@ async def enviar_sola(mensaje):
 # --- LOOP JARVIS AUTONOMO ---
 def loop_autonomo():
     global ULTIMO_SISMO_ID, ULTIMO_BRIEFING
-    print("JARVIS V43 DESPERTO - Esperando 6am y sismos")
+    print("JARVIS V44 DESPERTO - MEMORIA AUTO - Esperando 6am y sismos")
     tz = pytz.timezone('America/Bogota')
     time.sleep(10)
     while True:
@@ -139,7 +153,7 @@ def loop_autonomo():
                     ULTIMO_SISMO_ID = s["id"]
                 elif s["id"]!= ULTIMO_SISMO_ID and s["mag"] >= 3.0:
                     ULTIMO_SISMO_ID = s["id"]
-                    supa_guardar(f"Sismo Mag {s['mag']} en {s['lugar']} a las {s['hora']}")
+                    supa_guardar(f"Sismo Mag {s['mag']} en {s['lugar']} a las {s['hora']}", "alerta sismo")
                     analisis = pensar(f"ALERTA SISMO NUEVO Mag {s['mag']} {s['lugar']} {s['hora']} Clima {tool_clima()}")
                     if "NADA" not in analisis.upper()[:10]:
                         loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
@@ -150,10 +164,17 @@ def loop_autonomo():
 
 def cerebro(texto, user_id=None):
     if "recuerda" in texto.lower():
-        supa_guardar(texto, usuario_id=user_id)
-        return f"Listo jefe, guardado para siempre en Supabase: '{texto}'"
+        # Guardado importante inmediato
+        respuesta = f"Listo jefe, guardado como importante para siempre: '{texto}'"
+        supa_guardar(texto, respuesta, usuario_id=user_id)
+        return respuesta
+
     contexto = f"Clima {tool_clima()} Dolar {tool_dolar()} Memoria {supa_leer()} Usuario dijo: {texto}"
-    return pensar(contexto)
+    respuesta = pensar(contexto)
+
+    # GUARDADO AUTOMATICO DE TODO - ESTA ES LA MAGIA NUEVA
+    supa_guardar(texto, respuesta, usuario_id=user_id)
+    return respuesta
 
 async def handle_message(update: Update, context):
     txt = update.message.text or ""
@@ -173,7 +194,7 @@ def run_bot():
     app_bot_global.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     threading.Thread(target=loop_autonomo, daemon=True).start()
-    print(f"Bot V43 JARVIS iniciado admin {CHAT_ID_ADMIN} modelo {MODELO_FIJO}")
+    print(f"Bot V44 JARVIS MEMORIA AUTO iniciado admin {CHAT_ID_ADMIN} modelo {MODELO_FIJO}")
     app_bot_global.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
