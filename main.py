@@ -22,6 +22,7 @@ ULTIMO_SISMO_ID = None
 ULTIMO_BRIEFING = None
 CAMARAS_VIGILADAS = {}
 app_bot_global = None
+ULTIMOS_MENSAJES = {} # Anti spam
 
 client = Groq(api_key=GROQ_KEY)
 app = Flask(__name__)
@@ -90,28 +91,30 @@ def tool_ver_imagen_url(image_url, pregunta="Describe que ves, tecnico, corto"):
 
 def pensar(contexto, es_briefing=False):
     memoria = supa_leer()
-    sys_prompt = f"Eres GEOSAT V100, asistente satelital de Cali, voz latina grave, serio, leal, tecnico, paisa. MEMORIA: {memoria} Hora: {datetime.datetime.now(pytz.timezone('America/Bogota')).strftime('%d %B %Y %H:%M')} {'Briefing 6am 4 lineas proactivo' if es_briefing else 'Responde corto, tecnico, usa memoria'}"
+    sys_prompt = f"Eres GEOSAT V100, asistente satelital de Cali, voz latina grave, serio, leal, tecnico, paisa. Habla como sistema. MEMORIA: {memoria} Hora: {datetime.datetime.now(pytz.timezone('America/Bogota')).strftime('%d %B %Y %H:%M')} {'Briefing 6am 4 lineas' if es_briefing else 'Responde corto, tecnico, usa memoria, 1 sola respuesta'}"
     try:
-        c = client.chat.completions.create(model=MODELO_FIJO, messages=[{"role":"system","content":sys_prompt},{"role":"user","content":contexto}], max_tokens=800, temperature=0.4)
+        c = client.chat.completions.create(model=MODELO_FIJO, messages=[{"role":"system","content":sys_prompt},{"role":"user","content":contexto}], max_tokens=600, temperature=0.4)
         return c.choices[0].message.content
     except Exception as e: return f"Error Groq: {e}"
 
+# --- VOZ GEOSAT LATINO GRATIS - CORREGIDA ---
 async def enviar_voz(chat_id, texto):
     try:
-        texto_corto = texto[:380].replace("*","").replace("_","").replace("#","")
-        if not texto_corto.strip(): return
+        texto_corto = texto[:350].replace("*","").replace("_","").replace("#","").strip()
+        if not texto_corto: return
         try:
             import edge_tts
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
                 temp_path = fp.name
-            communicate = edge_tts.Communicate(texto_corto, VOZ_GEOSAT, rate="-5%", pitch="-10Hz")
+            communicate = edge_tts.Communicate(texto_corto, VOZ_GEOSAT, rate="-8%", pitch="-15Hz")
             await communicate.save(temp_path)
             with open(temp_path, 'rb') as f:
                 await app_bot_global.bot.send_voice(chat_id=chat_id, voice=f)
             os.unlink(temp_path)
+            print(f"Voz Geosat enviada {VOZ_GEOSAT}")
             return
         except Exception as e:
-            print(f"Error edge-tts {e}")
+            print(f"Error edge-tts {e}, fallback gTTS")
             tts = gTTS(text=texto_corto, lang='es', slow=False, tld='com.mx')
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
                 temp_path = fp.name
@@ -120,20 +123,20 @@ async def enviar_voz(chat_id, texto):
                 await app_bot_global.bot.send_voice(chat_id=chat_id, voice=f)
             os.unlink(temp_path)
     except Exception as e:
-        print(f"Error voz: {e}")
+        print(f"Error voz final: {e}")
 
 async def enviar_sola(mensaje, con_voz=False):
     if app_bot_global and CHAT_ID_ADMIN:
         try:
             await app_bot_global.bot.send_message(chat_id=int(CHAT_ID_ADMIN), text=mensaje[:4000])
-            if con_voz: await enviar_voz(int(CHAT_ID_ADMIN), mensaje[:350])
+            if con_voz: await enviar_voz(int(CHAT_ID_ADMIN), mensaje[:300])
         except: pass
 
 def loop_autonomo():
     global ULTIMO_SISMO_ID, ULTIMO_BRIEFING
     print("GEOSAT V100 DESPERTO")
     tz = pytz.timezone('America/Bogota')
-    time.sleep(10)
+    time.sleep(15)
     while True:
         try:
             ahora = datetime.datetime.now(tz)
@@ -141,7 +144,7 @@ def loop_autonomo():
                 datos = f"Briefing 6am Clima {tool_clima()} Dolar {tool_dolar()} Memoria {supa_leer()}"
                 texto = pensar(datos, es_briefing=True)
                 loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-                loop.run_until_complete(enviar_sola(f"☀️ BUENOS DIAS JEFE - BRIEFING 6AM GEOSAT\n\n{texto}", con_voz=True))
+                loop.run_until_complete(enviar_sola(f"☀️ BUENOS DIAS JEFE - BRIEFING GEOSAT 6AM\n\n{texto}", con_voz=True))
                 ULTIMO_BRIEFING = ahora.date()
 
             s = get_sismo_real()
@@ -153,16 +156,6 @@ def loop_autonomo():
                     analisis = pensar(f"ALERTA SISMO Mag {s['mag']} {s['lugar']} {s['hora']}")
                     loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
                     loop.run_until_complete(enviar_sola(f"🚨 GEOSAT SISMO Mag {s['mag']} {s['lugar']} {s['hora']}\n\n{analisis}", con_voz=True))
-
-            if CAMARAS_VIGILADAS and ahora.minute % 2 == 0 and ahora.second < 20:
-                for url in list(CAMARAS_VIGILADAS.keys()):
-                    try:
-                        analisis = tool_ver_imagen_url(url, "Eres vigilante GEOSAT. Responde PERSONAS: SI/NO, MOVIMIENTO: SI/NO, PELIGRO: SI/NO, DESCRIPCION corta")
-                        if "PERSONAS: SI" in analisis.upper():
-                            loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-                            loop.run_until_complete(enviar_sola(f"👁️🚨 ALERTA GEOSAT CAMARA\n📹 {url[:80]}\n\n{analisis}", con_voz=True))
-                        time.sleep(3)
-                    except: pass
             time.sleep(30)
         except Exception as e:
             print(f"Error loop {e}"); time.sleep(60)
@@ -176,8 +169,17 @@ def cerebro(texto, user_id=None):
     supa_guardar(texto, resp, usuario_id=user_id); return resp
 
 async def handle_message(update: Update, context):
+    global ULTIMOS_MENSAJES
     txt = update.message.text or ""
     uid = update.effective_user.id
+    msg_id = update.message.message_id
+
+    # ANTI-DUPLICADO: si el mismo mensaje id ya se proceso, ignorar
+    clave = f"{uid}_{msg_id}"
+    if clave in ULTIMOS_MENSAJES: return
+    ULTIMOS_MENSAJES[clave] = time.time()
+    # Limpia viejos
+    if len(ULTIMOS_MENSAJES) > 100: ULTIMOS_MENSAJES.clear()
 
     if update.message.voice or update.message.audio:
         try:
@@ -200,9 +202,9 @@ async def handle_message(update: Update, context):
             photo = update.message.photo[-1]
             file = await context.bot.get_file(photo.file_id)
             await update.message.reply_text("👁️ Geosat analizando...")
-            vision = tool_ver_imagen_url(file.file_path, "Describe como Geosat grave, tecnico, paisa")
+            vision = tool_ver_imagen_url(file.file_path, "Describe como Geosat grave tecnico paisa")
             await update.message.reply_text(f"👁️ GEOSAT VE:\n\n{vision[:3800]}")
-            if len(vision) < 400: await enviar_voz(update.effective_chat.id, vision[:350])
+            await enviar_voz(update.effective_chat.id, vision[:280])
             supa_guardar("Foto analizada", vision, usuario_id=uid); return
         except Exception as e:
             await update.message.reply_text(f"Error vision {e}"); return
@@ -221,22 +223,16 @@ async def handle_message(update: Update, context):
         CAMARAS_VIGILADAS.clear()
         await update.message.reply_text("🛑 Vigilancia Geosat detenida."); return
 
-    if "http" in low and any(x in low for x in [".jpg",".png","webcam","snapshot"]):
-        urls = re.findall(r'https?://\S+', txt)
-        if urls:
-            await update.message.reply_text(f"👁️ Geosat conectando a cámara...")
-            vision = tool_ver_imagen_url(urls[0], f"{txt} Describe como Geosat grave")
-            await update.message.reply_text(f"👁️ GEOSAT VE:\n\n{vision[:3800]}")
-            await enviar_voz(update.effective_chat.id, vision[:350])
-            return
-
     if "mi id" in low: await update.message.reply_text(f"Tu ID {uid}"); return
     if "memoria" in low or "que recuerdas" in low: await update.message.reply_text(f"🧠 GEOSAT MEMORIA:\n{supa_leer()[:3500]}"); return
 
+    # CEREBRO PRINCIPAL - 1 SOLA RESPUESTA
     resp = cerebro(txt, user_id=uid)
     await update.message.reply_text(resp[:4000])
-    if any(k in low for k in ["voz","habla","audio","habla geosat","dime"]) or len(resp) < 300:
-        await enviar_voz(update.effective_chat.id, resp[:350])
+
+    # Solo manda voz si lo pides o si es corto
+    if any(k in low for k in ["voz","habla","audio","habla geosat","dime"]) or ("hola" in low and len(low) < 10):
+        await enviar_voz(update.effective_chat.id, resp[:300])
 
 def run_bot():
     global app_bot_global
@@ -244,8 +240,9 @@ def run_bot():
     app_bot_global.add_handler(MessageHandler(filters.ALL, handle_message))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     threading.Thread(target=loop_autonomo, daemon=True).start()
-    print("Bot GEOSAT V100 iniciado")
-    app_bot_global.run_polling(drop_pending_updates=True)
+    print("Bot GEOSAT V100 iniciado FINAL")
+    # drop_pending_updates evita duplicados al reiniciar Render
+    app_bot_global.run_polling(drop_pending_updates=True, allowed_updates=["message"], poll_interval=2.0)
 
 if __name__ == '__main__':
     run_bot()
