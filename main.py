@@ -1,4 +1,12 @@
+<<<<<<< HEAD
 # GEOSAT V1012.2 FIX FINAL
+=======
+<<<<<<< HEAD
+# GEOSAT V1012.1 FIX - SIN ERROR DE COMILLAS
+=======
+# GEOSAT V1012.2 FIX FINAL
+>>>>>>> 346b12b (FIX V1012.2 vendedor final)
+>>>>>>> d0de773
 import telebot, os, threading, time, datetime, io, json
 from flask import Flask
 from PIL import Image, ImageEnhance, ImageOps
@@ -47,7 +55,15 @@ def mejorar_imagen(data):
     img = Image.open(io.BytesIO(data)).convert("L")
     max_width = 1600
     if img.width > max_width:
+<<<<<<< HEAD
         ratio = max_width / float(img.width)
+=======
+<<<<<<< HEAD
+        ratio = max_width / img.width
+=======
+        ratio = max_width / float(img.width)
+>>>>>>> 346b12b (FIX V1012.2 vendedor final)
+>>>>>>> d0de773
         img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
     elif img.width < 800:
         img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
@@ -59,8 +75,18 @@ def ocr_maximo(data):
     try:
         img = mejorar_imagen(data)
         for psm in [6, 3]:
+<<<<<<< HEAD
             cfg = "--oem 3 --psm " + str(psm)
             try:
+=======
+<<<<<<< HEAD
+            config = f'--oem 3 --psm {psm}'
+            try:
+                t = pytesseract.image_to_string(img
+=======
+            cfg = "--oem 3 --psm " + str(psm)
+            try:
+>>>>>>> d0de773
                 txt = pytesseract.image_to_string(img, lang="spa+eng", config=cfg)
                 if len(txt.strip()) > 20:
                     return txt.strip()
@@ -137,3 +163,4 @@ def run_bot():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     run_bot()
+>>>>>>> 346b12b (FIX V1012.2 vendedor final)
