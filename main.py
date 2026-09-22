@@ -1,4 +1,4 @@
-# GEOSAT V1012 MAX VENDEDOR - OCR BONITO + ESTABLE + GROQ
+# GEOSAT V1012.1 FIX - SIN ERROR DE COMILLAS
 import telebot, os, threading, time, datetime, io, json
 from flask import Flask
 from PIL import Image, ImageEnhance, ImageOps
@@ -57,59 +57,4 @@ def ocr_maximo(data):
         for psm in [6, 3]:
             config = f'--oem 3 --psm {psm}'
             try:
-                t = pytesseract.image_to_string(img, lang='spa+eng', config=config)
-                if len(t.strip()) > 20:
-                    return t.strip()
-            except: continue
-    except Exception as e:
-        print(f"OCR error: {e}")
-    return None
-
-def consulta_groq_max(prompt, memoria=""):
-    system = f"Eres Geosat V1012, IA vendedora de Cali, experta en camaras y geologia. Historial:\n{memoria}\nResponde util y directa. Si es un afiche, conviertelo en texto vendedor."
-    for model in MODELOS_TEXTO:
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                max_tokens=1200,
-                temperature=0.4
-            )
-            return resp.choices[0].message.content
-        except Exception as e:
-            print(f"Fallo {model}: {e}")
-            continue
-    return "Estoy en mantenimiento, pero ya guarde tu mensaje."
-
-@bot.message_handler(commands=['start'])
-def start(m):
-    guardar_memoria(m.from_user.id, "start", "/start")
-    bot.reply_to(m, "🚀 GEOSAT V1012 MAX VENDEDOR LIVE\n\nSoy tu IA al maximo:\n✅ Leo afiches y los convierto en texto de venta\n✅ Aprendo de ti\n📸 Mandame una foto de un afiche y te lo hago bonito para WhatsApp.")
-
-@bot.message_handler(content_types=['photo'])
-def foto(m):
-    try:
-        bot.send_chat_action(m.chat.id, 'typing')
-        file_id = m.photo[-2].file_id if len(m.photo) > 1 else m.photo[-1].file_id
-        file_info = bot.get_file(file_id)
-        data = bot.download_file(file_info.file_path)
-
-        texto_ocr = ocr_maximo(data)
-
-        if not texto_ocr:
-            bot.reply_to(m, "📸 Recibi la foto pero el texto esta borroso. Mandala de frente con buena luz porfa.")
-            return
-
-        guardar_memoria(m.chat.id, "foto_ocr", texto_ocr)
-        memoria = leer_memoria_usuario(m.chat.id)
-
-        prompt = f"""
-Tienes el texto OCR de este afiche de camaras:
-
-{texto_ocr}
-
-Caption usuario: {m.caption or 'sin caption'}
-
-TAREA: Conviertelo en un mensaje VENDEDOR listo para copiar/pegar en WhatsApp.
-REGLAS:
-- No uses tablas con | ni
+                t = pytesseract.image_to_string(img
