@@ -7,23 +7,19 @@ from PIL import Image
 import pytesseract
 
 logging.basicConfig(level=logging.INFO)
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# --- V1012.2 FIX VENDEDOR FINAL ---
 def limpiar_texto(texto):
     texto = re.sub(r'\s+', ' ', texto).strip()
     return texto
 
 def generar_mensaje_vendedor(texto_ocr):
     texto = texto_ocr.upper()
-    
-    # Datos base por defecto si no lee bien
     lote = "Manzana D - Lote 22" if "MANZANA" in texto or "LOTE" in texto else "Lote Disponible"
     precio_match = re.search(r'\$?\s?(\d{1,3}[\.,]?\d{3}[\.,]?\d{3})', texto_ocr)
     precio = precio_match.group(0) if precio_match else "$60.000.000"
     if "HOLMES" in texto or "ZEA" in texto:
         lote = "Holmes Zea - El Poblado"
-
     mensaje = f"""🏡 *¡OPORTUNIDAD EN VENTA!* 🏡
 
 📍 *{lote}*
@@ -48,23 +44,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("afiche.jpg")
-        
         img = Image.open("afiche.jpg")
         texto_ocr = pytesseract.image_to_string(img, lang='spa+eng')
-        
         if not texto_ocr.strip():
             texto_ocr = "Lote en venta - Holmes Zea"
-            
         mensaje_final = generar_mensaje_vendedor(texto_ocr)
         await update.message.reply_text(mensaje_final, parse_mode='Markdown')
-        
     except Exception as e:
         logging.error(f"Error: {e}")
         await update.message.reply_text(f"Uy parcero, error leyendo: {e}\nPero igual: ¡Lote disponible! Escríbeme.")
 
 if __name__ == '__main__':
     if not TOKEN:
-        print("Falta BOT_TOKEN en Variables de Entorno de Render")
+        print("Falta TELEGRAM_TOKEN en Variables de Entorno de Render")
     else:
         app = ApplicationBuilder().token(TOKEN).build()
         app.add_handler(CommandHandler("start", start))
