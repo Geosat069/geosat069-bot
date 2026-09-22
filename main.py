@@ -1,4 +1,4 @@
-# GEOSAT V901 DIOS FIX - VISION BASE64 + CLIMA REAL
+# GEOSAT V902 DIOS - VISION FIX DEFINITIVO
 import telebot, os, sqlite3, datetime, threading, time, requests, tempfile, base64
 from groq import Groq
 from dotenv import load_dotenv
@@ -21,9 +21,9 @@ def get_models():
         return "openai/gpt-oss-20b","openai/gpt-oss-120b","llama-3.2-90b-vision-preview"
 
 MODEL_FAST, MODEL_SMART, MODEL_VISION = get_models()
-print(f"V901 {MODEL_FAST} / {MODEL_SMART} / {MODEL_VISION}")
+print(f"V902 {MODEL_FAST} / {MODEL_SMART} / {MODEL_VISION}")
 
-SYSTEM_PROMPT = """Eres GEOSAT V901 DIOS, de Cali. Sos caleño 100%: "oelo ve", "parcero", "vos", "melo". Si ves imagen, DESCRIBELA DETALLADA. Si te dan clima, usa datos reales. Corto y potente."""
+SYSTEM_PROMPT = """Eres GEOSAT V902 DIOS, de Cali. Sos caleño 100%: decí "oelo ve", "parcero", "vos", "melo", "sisas". Si ves imagen, DESCRIBELA COMPLETA y LEE TODO EL TEXTO que veas. Si es aviso de trabajo, extrae fecha, lugar, requisitos. Corto, útil y potente."""
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 client = Groq(api_key=GROQ_KEY)
@@ -37,12 +37,13 @@ cur.execute("CREATE TABLE IF NOT EXISTS cooldown (user_id TEXT PRIMARY KEY, last
 con.commit()
 
 for _ in range(2):
-    try: bot.remove_webhook(); requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+    try:
+        bot.remove_webhook()
+        requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
     except: pass
 
 def get_clima_cali():
     try:
-        # API real sin key
         r = requests.get("https://wttr.in/Cali+Colombia?format=j1", timeout=10).json()
         temp = r['current_condition'][0]['temp_C']
         desc = r['current_condition'][0]['weatherDesc'][0]['value']
@@ -63,7 +64,10 @@ def save_fact(uid, text):
 def is_voice_on(uid):
     r=cur.execute("SELECT voice FROM settings WHERE user_id=?",(uid,)).fetchone()
     return r and r[0]==1
-def set_voice(uid,on): cur.execute("INSERT OR REPLACE INTO settings VALUES (?,?)",(uid,1 if on else 0)); con.commit()
+
+def set_voice(uid,on):
+    cur.execute("INSERT OR REPLACE INTO settings VALUES (?,?)",(uid,1 if on else 0)); con.commit()
+
 def check_spam(uid):
     now=int(time.time()); last=cur.execute("SELECT last FROM cooldown WHERE user_id=?",(uid,)).fetchone()
     if last and now-last[0]<2: return True
@@ -83,7 +87,7 @@ def ask_groq(uid, msg, b64_image=None):
     else:
         messages.append({"role":"user","content":ctx})
     try:
-        c=client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=800)
+        c=client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=900)
         return c.choices[0].message.content
     except Exception as e:
         print(f"Vision fallo {e}, usando fast")
@@ -91,6 +95,7 @@ def ask_groq(uid, msg, b64_image=None):
         return c.choices[0].message.content
 
 async def tts_col(text, path): await edge_tts.Communicate(text, "es-CO-SalomeNeural").save(path)
+
 def send_voice(chat_id, text):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as f: path=f.name
@@ -102,10 +107,10 @@ def send_voice(chat_id, text):
 @bot.message_handler(commands=['start','voz','memoria','clima'])
 def cmds(m):
     uid=str(m.from_user.id)
-    if m.text.startswith('/start'): bot.reply_to(m, "GEOSAT V901 DIOS ACTIVO 🔥\nYa VEO fotos en base64 y CLIMA REAL.\n/voz /memoria /clima")
+    if m.text.startswith('/start'): bot.reply_to(m, "GEOSAT V902 DIOS ACTIVO 🔥\nYa VEO fotos 100% y CLIMA REAL.\n/voz /memoria /clima")
     elif m.text.startswith('/voz'):
         nv=not is_voice_on(uid); set_voice(uid,nv); bot.reply_to(m, "Voz caleña ON" if nv else "OFF")
-    elif m.text.startswith('/memoria'): bot.reply_to(m, get_memory(uid) or "Nada")
+    elif m.text.startswith('/memoria'): bot.reply_to(m, get_memory(uid) or "Nada guardado")
     elif m.text.startswith('/clima'): bot.reply_to(m, ask_groq(uid, f"Dame clima de Cali caleño con esto: {get_clima_cali()}"))
 
 @bot.message_handler(content_types=['photo'])
@@ -114,14 +119,17 @@ def handle_photo(m):
     if check_spam(uid): return
     bot.send_chat_action(m.chat.id,'typing')
     try:
-        fi=bot.get_file(m.file_id)
+        file_id = m.photo[-1].file_id
+        fi=bot.get_file(file_id)
         data=bot.download_file(fi.file_path)
         b64 = base64.b64encode(data).decode('utf-8')
-        cap=m.caption or "Que ves en esta imagen? Describe detallado, lee texto si hay."
+        cap=m.caption or "Que ves en esta imagen? Describe detallado, lee todo el texto si hay."
         resp=ask_groq(uid, cap, b64_image=b64)
         bot.reply_to(m, resp)
         if is_voice_on(uid): send_voice(m.chat.id, resp)
-    except Exception as e: bot.reply_to(m, f"Error vision: {e}")
+    except Exception as e:
+        print(f"Error photo: {e}")
+        bot.reply_to(m, f"Error vision: {e}")
 
 @bot.message_handler(content_types=['voice'])
 def handle_voice(m):
@@ -148,7 +156,7 @@ def all_msg(m):
     bot.reply_to(m, resp) if not is_voice_on(uid) else send_voice(m.chat.id, resp)
 
 @app.route('/')
-def home(): return f"V901 LIVE {datetime.datetime.now()}"
+def home(): return f"V902 LIVE {datetime.datetime.now()}"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT",10000)))
 def run_bot():
     while True:
