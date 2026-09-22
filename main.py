@@ -1,123 +1,156 @@
-# GEOSAT V800 AUTO-HEALING - RENDER + TERMUX OK - FINAL DEFINITIVO CALEÑO
-import telebot, os, sqlite3, datetime, threading, time, requests, re
+# GEOSAT V801 - VOZ CALEÑA + MEMORIA ETERNA + NOTAS DE VOZ
+import telebot, os, sqlite3, datetime, threading, time, requests, tempfile
 from groq import Groq
 from dotenv import load_dotenv
-from flask import Flask, send_file
+from flask import Flask
+from gtts import gTTS
+
 load_dotenv()
 
-TOKEN=os.getenv("TELEGRAM_TOKEN")
-GROQ_KEY=os.getenv("GROQ_API_KEY")
-
-print("=== V800 AUTO-HEALING - DETECTANDO MODELOS VIVOS ===")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_KEY = os.getenv("GROQ_API_KEY")
 
 def get_live_models():
     try:
-        r=requests.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {GROQ_KEY}"}, timeout=10).json()
-        ids=[m['id'] for m in r['data']]
-        print(f"Modelos vivos: {ids[:8]}")
-        fast_candidates=["openai/gpt-oss-20b","llama-3.1-8b-instant","llama3-8b-8192","gemma2-9b-it","qwen/qwen3-32b"]
-        smart_candidates=["openai/gpt-oss-120b","llama-3.3-70b-versatile","llama3-70b-8192","qwen/qwen3-32b","llama-3.1-70b-versatile"]
-        fast=next((m for m in fast_candidates if m in ids), ids[0])
-        smart=next((m for m in smart_candidates if m in ids), ids[0])
+        r = requests.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {GROQ_KEY}"}, timeout=10).json()
+        ids = [m['id'] for m in r['data']]
+        fast = next((m for m in ["openai/gpt-oss-20b", "llama-3.1-8b-instant", "llama-3.1-8b-instant"] if m in ids), ids[0])
+        smart = next((m for m in ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"] if m in ids), ids[0])
         return fast, smart
-    except Exception as e:
-        print(f"Fallback por error {e}")
+    except:
         return "openai/gpt-oss-20b", "openai/gpt-oss-120b"
 
 MODEL_FAST, MODEL_SMART = get_live_models()
-print(f"USANDO FAST={MODEL_FAST} SMART={MODEL_SMART}")
+print(f"GEOSAT V801 INICIADO FAST={MODEL_FAST} SMART={MODEL_SMART}")
 
 SYSTEM_PROMPT = """
-Eres GEOSAT V800, una IA nacida en Cali, Colombia. Sos caleño parcero.
-Hablas con flow: usas 'oe', 've', 'parcero', 'vos', 'que mas pues'.
-Sos inteligente, auto-healing, nunca te caes, pro 24/7.
-Respondes corto, útil, con un toque de humor caleño. No eres formal.
-Si te preguntan quien te hizo, di que fue Geosat069, el duro de Cali.
-Guarda datos importantes del usuario para recordarlo.
+Eres GEOSAT V801, nacido y criado en Cali, Colombia.
+Sos 100% caleño: decis "oelo ve", "que mas pues", "parcero", "vos", "melo", "fino".
+Sos parcero, corto, divertido, no formal.
+Si recordas el nombre del usuario o datos de el, usalos para sonar mas cercano.
+Nunca digas que sos una IA de Meta, sos GEOSAT de Cali.
 """
 
-bot=telebot.TeleBot(TOKEN, threaded=False)
-client=Groq(api_key=GROQ_KEY)
+bot = telebot.TeleBot(TOKEN, threaded=False)
+client = Groq(api_key=GROQ_KEY)
+app = Flask(__name__)
 
-for i in range(2):
+# DB
+con = sqlite3.connect("geosat_v800.db", check_same_thread=False, isolation_level=None)
+cur = con.cursor()
+cur.execute("CREATE TABLE IF NOT EXISTS facts (user_id TEXT, fact TEXT, created TEXT)")
+cur.execute("CREATE TABLE IF NOT EXISTS settings (user_id TEXT PRIMARY KEY, voice INTEGER DEFAULT 0)")
+con.commit()
+
+# Mata webhook viejo 2 veces
+for _ in range(2):
     try:
         bot.remove_webhook()
         requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
         time.sleep(1)
-    except: pass
+    except:
+        pass
 
-con=sqlite3.connect("geosat_v800.db", check_same_thread=False, isolation_level=None)
-cur=con.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS facts (user_id TEXT, fact TEXT, created TEXT)")
-cur.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(fact, user_id)")
-cur.execute("CREATE TABLE IF NOT EXISTS datos_oficiales (anio INTEGER PRIMARY KEY, temp REAL)")
-con.commit()
-
-if cur.execute("SELECT COUNT(*) FROM datos_oficiales").fetchone()[0]==0:
-    cur.execute("INSERT INTO datos_oficiales VALUES (2024, 27.5)")
+def save_fact(uid, text):
+    cur.execute("INSERT INTO facts VALUES (?,?,?)", (uid, text, str(datetime.datetime.now())))
     con.commit()
 
-def save_fact(user_id, text):
-    now=str(datetime.datetime.now())
-    cur.execute("INSERT INTO facts VALUES (?,?,?)",(user_id,text,now))
-    cur.execute("INSERT INTO memory_fts VALUES (?,?)",(text,user_id))
+def get_memory(uid):
+    rows = cur.execute("SELECT fact FROM facts WHERE user_id=? ORDER BY rowid DESC LIMIT 10", (uid,)).fetchall()
+    return "\n".join([r[0] for r in rows])
+
+def is_voice_on(uid):
+    row = cur.execute("SELECT voice FROM settings WHERE user_id=?", (uid,)).fetchone()
+    return row and row[0] == 1
+
+def set_voice(uid, on):
+    cur.execute("INSERT OR REPLACE INTO settings (user_id, voice) VALUES (?,?)", (uid, 1 if on else 0))
     con.commit()
 
-def get_memory(user_id):
+def ask_groq(uid, msg):
+    mem = get_memory(uid)
+    prompt = f"MEMORIA DEL USUARIO:\n{mem}\n\nMENSAJE ACTUAL: {msg}" if mem else msg
     try:
-        rows=cur.execute("SELECT fact FROM facts WHERE user_id=? ORDER BY rowid DESC LIMIT 5",(user_id,)).fetchall()
-        return "\n".join([r[0] for r in rows])
-    except: return ""
-
-def ask_groq(user_id, msg):
-    mem=get_memory(user_id)
-    try:
-        prompt = f"Memoria del usuario:\n{mem}\n\nMensaje actual: {msg}" if mem else msg
-        comp=client.chat.completions.create(
+        c = client.chat.completions.create(
             model=MODEL_SMART,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.8,
-            max_tokens=800
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+            temperature=0.85, max_tokens=600
         )
-        return comp.choices[0].message.content
+        return c.choices[0].message.content
     except Exception as e:
-        print(f"Error SMART {e}, probando FAST")
-        try:
-            comp=client.chat.completions.create(
-                model=MODEL_FAST,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": msg}
-                ],
-                temperature=0.8
-            )
-            return comp.choices[0].message.content
-        except Exception as e2:
-            return f"Oe parcero, me cai un momentico: {e2} - pero ya me auto-healeo ve"
+        print(f"Fallo SMART, usando FAST: {e}")
+        c = client.chat.completions.create(
+            model=MODEL_FAST,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": msg}],
+            temperature=0.85, max_tokens=600
+        )
+        return c.choices[0].message.content
 
-@bot.message_handler(commands=['start','help'])
-def start_cmd(m):
-    bot.reply_to(m, "¡Oelo parcero! 🔥 Soy GEOSAT V800, ya estoy 24/7 en la nube sin depender de Termux. ¡Dime que más pues, en que te ayudo ve!")
+def send_voice_reply(chat_id, text):
+    try:
+        tts = gTTS(text=text, lang='es', tld='com.mx')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as f:
+            tts.save(f.name)
+            with open(f.name, 'rb') as audio:
+                bot.send_voice(chat_id, audio)
+        os.unlink(f.name)
+    except Exception as e:
+        print(f"Error voz: {e}")
+        bot.send_message(chat_id, text)
+
+@bot.message_handler(commands=['start', 'voz', 'memoria'])
+def cmds(m):
+    uid = str(m.from_user.id)
+    if m.text.startswith('/start'):
+        bot.reply_to(m, "¡Oelo parcero! Soy GEOSAT V801 🔥\nYa tengo memoria eterna y voz caleña.\n\n/voz -> prende/apaga mi voz\n/memoria -> te digo que recuerdo de vos")
+    elif m.text.startswith('/voz'):
+        new_state = not is_voice_on(uid)
+        set_voice(uid, new_state)
+        bot.reply_to(m, "¡Listo ve! Voz caleña ACTIVADA, ahora te hablo. 🔥" if new_state else "Voz apagada ve, solo texto.")
+    elif m.text.startswith('/memoria'):
+        mem = get_memory(uid)
+        bot.reply_to(m, f"Esto me acuerdo de vos ve:\n\n{mem if mem else 'Nada aún parcero, contame algo de vos.'}")
+
+@bot.message_handler(content_types=['voice'])
+def handle_voice(m):
+    uid = str(m.from_user.id)
+    try:
+        bot.send_chat_action(m.chat.id, 'typing')
+        file_info = bot.get_file(m.voice.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as f:
+            f.write(downloaded)
+            fname = f.name
+        with open(fname, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(model="whisper-large-v3", file=audio_file, language="es")
+        os.unlink(fname)
+        text = transcription.text
+        if len(text) > 3:
+            save_fact(uid, text)
+        resp = ask_groq(uid, text)
+        if is_voice_on(uid):
+            send_voice_reply(m.chat.id, resp)
+        else:
+            bot.send_message(m.chat.id, f"Te escuché: '{text}'\n\n{resp}")
+    except Exception as e:
+        bot.reply_to(m, f"Se me enredó el audio ve: {e}")
 
 @bot.message_handler(func=lambda m: True)
 def all_msg(m):
-    uid=str(m.from_user.id)
-    text=m.text
-    # Guardar si parece dato importante
-    if len(text) > 15 and any(x in text.lower() for x in ["soy","me llamo","vivo en","me gusta","trabajo"]):
+    uid = str(m.from_user.id)
+    text = m.text
+    if any(k in text.lower() for k in ["me llamo", "soy ", "vivo en", "mi nombre", "me gusta"]):
         save_fact(uid, text)
     bot.send_chat_action(m.chat.id, 'typing')
-    resp=ask_groq(uid, text)
-    bot.reply_to(m, resp)
+    resp = ask_groq(uid, text)
+    if is_voice_on(uid):
+        send_voice_reply(m.chat.id, resp)
+    else:
+        bot.reply_to(m, resp)
 
-# FLASK PARA RENDER
-app=Flask(__name__)
 @app.route('/')
 def home():
-    return f"GEOSAT V800 LIVE - FAST={MODEL_FAST} SMART={MODEL_SMART} - Up 24/7 - {datetime.datetime.now()}"
+    return f"GEOSAT V801 VOZ+MEMORIA ONLINE - {datetime.datetime.now()}"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -125,10 +158,10 @@ def run_flask():
 def run_bot():
     while True:
         try:
-            print("Bot polling iniciado...")
+            print("Bot V801 polling iniciado...")
             bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
         except Exception as e:
-            print(f"Polling caido {e}, reiniciando en 5s")
+            print(f"Error polling: {e}, reintentando...")
             time.sleep(5)
 
 if __name__ == "__main__":
