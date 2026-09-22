@@ -1,0 +1,6 @@
+pyTelegramBotAPI
+groq
+python-dotenv
+Flask
+Pillow
+PyPDF2
