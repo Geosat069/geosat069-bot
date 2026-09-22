@@ -2,3 +2,11 @@
 node_modules
 sessions
 temp
+geosat_v800.db
+*.db
+*.png
+*.mp3
+*.ogg
+__pycache__/
+*.log
+v800.png
