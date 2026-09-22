@@ -1,0 +1,7 @@
+pyTelegramBotAPI
+groq
+python-dotenv
+Flask
+Pillow
+requests
+gunicorn
