@@ -1,4 +1,4 @@
-# GEOSAT V906 - VISION FIX LLAVA + LLAMA4 - FUNCIONA CON KEY GRATIS
+# GEOSAT V907 - QWEN VISION - UNICO MODELO ACTIVO GROQ 2026
 import telebot, os, sqlite3, datetime, threading, time, base64, io
 from groq import Groq
 from dotenv import load_dotenv
@@ -9,14 +9,9 @@ load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 
-# ESTOS SI FUNCIONAN EN FREE TIER
-MODELS = [
-    "llava-v1.5-7b-4096-preview",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "meta-llama/llama-4-scout-17b-16e-instruct"
-]
-MODEL_TEXT = "llama-3.3-70b-versatile"
-print(f"V906 VISION {MODELS}")
+MODEL_VISION = "qwen/qwen3.8-27b"
+MODEL_TEXT = "openai/gpt-oss-20b"
+print(f"V907 VISION {MODEL_VISION}")
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 client = Groq(api_key=GROQ_KEY)
@@ -29,38 +24,33 @@ con.commit()
 
 def compress(data):
     img = Image.open(io.BytesIO(data)).convert("RGB")
-    img.thumbnail((800, 800))
+    img.thumbnail((1024, 1024))
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=60, optimize=True)
-    print(f"Comp {len(data)}->{len(buf.getvalue())}")
+    img.save(buf, format="JPEG", quality=75, optimize=True)
     return buf.getvalue()
 
 def ask_vision(msg, b64):
-    for model in MODELS:
-        try:
-            print(f"Probando {model} len={len(b64)}")
-            r = client.chat.completions.create(
-                model=model,
-                messages=[{"role":"user","content":[
-                    {"type":"text","text": f"Lee TODO el texto de esta imagen literal y completo. Usuario pregunta: {msg}. Si es curso da: nombre curso, instructor, certificado, modalidad, empresa. Responde caleño oelo ve."},
-                    {"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}}
-                ]}],
-                max_tokens=1200, temperature=0.2
-            )
-            print(f"OK {model}")
-            return r.choices[0].message.content
-        except Exception as e:
-            print(f"FAIL {model}: {e}")
-            last = e
-            continue
-    return f"Oelo ve, Groq falló con todos: {last}. Crea nueva API key en console.groq.com/keys"
+    try:
+        print(f"Probando {MODEL_VISION} len={len(b64)}")
+        r = client.chat.completions.create(
+            model=MODEL_VISION,
+            messages=[{"role":"user","content":[
+                {"type":"text","text": f"Lee TODO el texto literal de esta imagen. Es un curso. Usuario pregunta: {msg}. Dame: nombre del curso, instructor, certificado, modalidad, empresa. Responde caleño."},
+                {"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}}
+            ]}],
+            max_tokens=1200, temperature=0.2
+        )
+        return r.choices[0].message.content
+    except Exception as e:
+        print(f"FAIL QWEN: {e}")
+        return f"Oelo ve, Groq falló: {e}"
 
 def ask_text(msg):
     r=client.chat.completions.create(model=MODEL_TEXT, messages=[{"role":"user","content":msg}], max_tokens=800)
     return r.choices[0].message.content
 
 @bot.message_handler(commands=['start'])
-def s(m): bot.reply_to(m,"GEOSAT V906 LIVE - Vision con Llava - prueba foto ahora")
+def s(m): bot.reply_to(m,"GEOSAT V907 LIVE - Qwen vision activo - manda foto ya")
 
 @bot.message_handler(content_types=['photo'])
 def photo(m):
@@ -79,7 +69,7 @@ def photo(m):
 def all_msg(m): bot.reply_to(m, ask_text(m.text))
 
 @app.route('/')
-def h(): return f"V906 LIVE {datetime.datetime.now()}"
+def h(): return f"V907 LIVE {MODEL_VISION} {datetime.datetime.now()}"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT",10000)))
 def run_bot():
     while True:
