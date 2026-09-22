@@ -1,4 +1,4 @@
-# GEOSAT V800 AUTO-HEALING - RENDER + TERMUX OK - FINAL DEFINITIVO
+# GEOSAT V800 AUTO-HEALING - RENDER + TERMUX OK - FINAL DEFINITIVO CALEÑO
 import telebot, os, sqlite3, datetime, threading, time, requests, re
 from groq import Groq
 from dotenv import load_dotenv
@@ -27,6 +27,15 @@ def get_live_models():
 MODEL_FAST, MODEL_SMART = get_live_models()
 print(f"USANDO FAST={MODEL_FAST} SMART={MODEL_SMART}")
 
+SYSTEM_PROMPT = """
+Eres GEOSAT V800, una IA nacida en Cali, Colombia. Sos caleño parcero.
+Hablas con flow: usas 'oe', 've', 'parcero', 'vos', 'que mas pues'.
+Sos inteligente, auto-healing, nunca te caes, pro 24/7.
+Respondes corto, útil, con un toque de humor caleño. No eres formal.
+Si te preguntan quien te hizo, di que fue Geosat069, el duro de Cali.
+Guarda datos importantes del usuario para recordarlo.
+"""
+
 bot=telebot.TeleBot(TOKEN, threaded=False)
 client=Groq(api_key=GROQ_KEY)
 
@@ -45,111 +54,83 @@ cur.execute("CREATE TABLE IF NOT EXISTS datos_oficiales (anio INTEGER PRIMARY KE
 con.commit()
 
 if cur.execute("SELECT COUNT(*) FROM datos_oficiales").fetchone()[0]==0:
-    for a,t in {2020:23.5,2021:23.7,2022:23.8,2023:24.0,2024:22.7,2025:24.3,2026:24.5}.items():
-        cur.execute("INSERT INTO datos_oficiales VALUES (?,?)", (a,t))
+    cur.execute("INSERT INTO datos_oficiales VALUES (2024, 27.5)")
     con.commit()
 
-def get_datos():
-    cur.execute("SELECT anio,temp FROM datos_oficiales ORDER BY anio")
-    rows=cur.fetchall()
-    txt=", ".join([f"{k}={v}C" for k,v in rows])
-    return {r[0]:r[1] for r in rows}, txt
+def save_fact(user_id, text):
+    now=str(datetime.datetime.now())
+    cur.execute("INSERT INTO facts VALUES (?,?,?)",(user_id,text,now))
+    cur.execute("INSERT INTO memory_fts VALUES (?,?)",(text,user_id))
+    con.commit()
 
-def tool_clima():
+def get_memory(user_id):
     try:
-        r=requests.get("https://api.open-meteo.com/v1/forecast?latitude=3.4516&longitude=-76.5320&current=temperature_2m,relative_humidity_2m&timezone=America/Bogota", timeout=8).json()
-        c=r['current']; return f"{c['temperature_2m']}C Hum {c['relative_humidity_2m']}% VIVO"
-    except: return "22.6C VIVO"
+        rows=cur.execute("SELECT fact FROM facts WHERE user_id=? ORDER BY rowid DESC LIMIT 5",(user_id,)).fetchall()
+        return "\n".join([r[0] for r in rows])
+    except: return ""
 
-def search_mem(uid, q):
+def ask_groq(user_id, msg):
+    mem=get_memory(user_id)
     try:
-        cur.execute("SELECT fact FROM memory_fts WHERE memory_fts MATCH? AND user_id=? LIMIT 5", (q, uid))
-        r=cur.fetchall()
-        if r: return [x[0] for x in r]
-        cur.execute("SELECT fact FROM facts WHERE user_id=? ORDER BY rowid DESC LIMIT 5", (uid,))
-        return [x[0] for x in cur.fetchall()]
-    except: return []
-
-def gen_grafica():
-    path="v800.png"
-    from PIL import Image, ImageDraw
-    datos,_=get_datos()
-    W,H=1600,900; img=Image.new('RGB',(W,H),'white'); d=ImageDraw.Draw(img)
-    mx,my=120,100; gw,gh=W-mx-100,H-my-140
-    years=list(datos.keys()); temps=list(datos.values())
-    def tx(i): return mx+int(i*gw/(len(years)-1))
-    def ty(t): return my+gh-int((t-22.0)/2.5*gh)
-    pts=[(tx(i),ty(t)) for i,t in enumerate(temps)]
-    d.line([(mx,my),(mx,my+gh)], fill='black', width=4); d.line([(mx,my+gh),(mx+gw,my+gh)], fill='black', width=4)
-    d.line(pts, fill='#0D47A1', width=8)
-    for (x,y),t in zip(pts,temps): d.ellipse((x-14,y-14,x+14,y+14), fill='#0D47A1'); d.text((x-18,y-45), f"{t}C", fill='black')
-    for i,yr in enumerate(years): d.text((tx(i)-10,my+gh+15), str(yr), fill='black')
-    d.text((20,20), f"CALI IDEAM {years[0]}-{years[-1]} {temps[0]}->{temps[-1]}C {MODEL_FAST}", fill='black')
-    img.save(path); return path
-
-def chat_groq_safe(messages, model, max_tokens=400):
-    try:
-        return client.chat.completions.create(model=model, messages=messages, max_tokens=max_tokens, temperature=0.2).choices[0].message.content
+        prompt = f"Memoria del usuario:\n{mem}\n\nMensaje actual: {msg}" if mem else msg
+        comp=client.chat.completions.create(
+            model=MODEL_SMART,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.8,
+            max_tokens=800
+        )
+        return comp.choices[0].message.content
     except Exception as e:
-        print(f"Fallo {model}: {e}")
+        print(f"Error SMART {e}, probando FAST")
         try:
-            other = MODEL_SMART if model==MODEL_FAST else MODEL_FAST
-            return client.chat.completions.create(model=other, messages=messages, max_tokens=max_tokens, temperature=0.2).choices[0].message.content
+            comp=client.chat.completions.create(
+                model=MODEL_FAST,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": msg}
+                ],
+                temperature=0.8
+            )
+            return comp.choices[0].message.content
         except Exception as e2:
-            return f"Error IA pero datos vivos OK: {e2}"
+            return f"Oe parcero, me cai un momentico: {e2} - pero ya me auto-healeo ve"
 
-@bot.message_handler(commands=['start','grafica','datos'])
-def cmds(m):
-    datos,txt=get_datos()
-    if 'grafica' in m.text:
-        p=gen_grafica()
-        with open(p,'rb') as f: bot.send_photo(m.chat.id, f, caption=f"OFICIAL {txt} {MODEL_FAST}")
-        return
-    bot.reply_to(m, f"V800 AUTO-HEALING ONLINE\n✅ {MODEL_FAST}\n✅ {MODEL_SMART}\n📊 {txt}\n- muestrame tendencia\n- /grafica")
+@bot.message_handler(commands=['start','help'])
+def start_cmd(m):
+    bot.reply_to(m, "¡Oelo parcero! 🔥 Soy GEOSAT V800, ya estoy 24/7 en la nube sin depender de Termux. ¡Dime que más pues, en que te ayudo ve!")
 
-@bot.message_handler(func=lambda x: True)
+@bot.message_handler(func=lambda m: True)
 def all_msg(m):
-    uid=str(m.from_user.id); text=m.text or ""
-    mm=re.search(r"(20\d{2}).*?(2[0-9]\.\d)", text)
-    if (" es " in text.lower() or "corrige" in text.lower()) and mm:
-        cur.execute("INSERT OR REPLACE INTO datos_oficiales VALUES (?,?)", (int(mm.group(1)), float(mm.group(2))))
-        con.commit()
-        bot.reply_to(m, f"✅ Corregido: {mm.group(1)}={mm.group(2)}C GUARDADO")
-        p=gen_grafica()
-        with open(p,'rb') as f: bot.send_photo(m.chat.id, f, caption="Grafica actualizada")
-        return
-    cur.execute("INSERT INTO facts VALUES (?,?,?)", (uid, text[:500], datetime.datetime.now().isoformat()))
-    try: cur.execute("INSERT INTO memory_fts VALUES (?,?)", (text[:500], uid))
-    except: pass
-    con.commit()
-    mem=search_mem(uid, text[:40])
-    datos,txt_datos=get_datos()
-    clima=tool_clima()
-    contexto=f"DATOS OFICIALES: {txt_datos}. CLIMA: {clima}. MEMORIA: {'; '.join(mem)[:600]}"
+    uid=str(m.from_user.id)
+    text=m.text
+    # Guardar si parece dato importante
+    if len(text) > 15 and any(x in text.lower() for x in ["soy","me llamo","vivo en","me gusta","trabajo"]):
+        save_fact(uid, text)
     bot.send_chat_action(m.chat.id, 'typing')
-    final=chat_groq_safe([{"role":"user","content":f"Contexto {contexto} Pregunta {text} Responde español caleño corto SOLO datos oficiales. Prohibido ingles NOAA."}], MODEL_SMART)
-    if any(k in text.lower() for k in ["tendencia","temperatura","grafica","ideam"]):
-        p=gen_grafica()
-        with open(p,'rb') as f: bot.send_photo(m.chat.id, f, caption=f"V800 {txt_datos}")
-    bot.reply_to(m, final)
+    resp=ask_groq(uid, text)
+    bot.reply_to(m, resp)
 
+# FLASK PARA RENDER
 app=Flask(__name__)
 @app.route('/')
-def home(): return f"<h1>V800 AUTO-HEALING {MODEL_FAST}</h1><p>{get_datos()[1]}</p><img src=/grafica width=100%>"
-@app.route('/grafica')
-def graf(): return send_file(gen_grafica(), mimetype='image/png')
+def home():
+    return f"GEOSAT V800 LIVE - FAST={MODEL_FAST} SMART={MODEL_SMART} - Up 24/7 - {datetime.datetime.now()}"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 def run_bot():
     while True:
-        try: bot.infinity_polling(timeout=90, long_polling_timeout=90)
-        except Exception as e: print(f"Polling error {e}"); time.sleep(10)
-
-def run_web():
-    port=int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-
-# Esto lo usa Render con gunicorn y Termux directo
-threading.Thread(target=run_bot, daemon=True).start()
+        try:
+            print("Bot polling iniciado...")
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
+        except Exception as e:
+            print(f"Polling caido {e}, reiniciando en 5s")
+            time.sleep(5)
 
 if __name__ == "__main__":
-    run_web()
+    threading.Thread(target=run_flask, daemon=True).start()
+    run_bot()
