@@ -3,4 +3,5 @@ groq
 python-dotenv
 Flask
 requests
+Pillow
 edge-tts
