@@ -2,6 +2,5 @@ pyTelegramBotAPI
 groq
 python-dotenv
 Flask
-requests
 Pillow
-edge-tts
+PyPDF2
