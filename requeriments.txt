@@ -3,4 +3,4 @@ groq
 python-dotenv
 Flask
 Pillow
-pytesseract
+requests
