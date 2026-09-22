@@ -1,4 +1,4 @@
-# GEOSAT V1010 MAX - IA AL MAXIMO - OCR 4 MODO + AUTO-APRENDIZAJE + GROQ INTELIGENTE
+# GEOSAT V1011 MAX - ESTABLE - OCR OPTIMIZADO PARA RENDER
 import telebot, os, threading, time, datetime, io, json, requests
 from flask import Flask
 from PIL import Image, ImageEnhance, ImageOps
@@ -15,9 +15,8 @@ client = Groq(api_key=GROQ_KEY)
 app = Flask(__name__)
 
 MEMORY_FILE = "memoria_geosat.jsonl"
-MODELOS_TEXTO = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+MODELOS_TEXTO = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "openai/gpt-oss-20b"]
 
-# --- AUTO-APRENDIZAJE ---
 def guardar_memoria(user_id, tipo, contenido):
     try:
         data = {"fecha": str(datetime.datetime.now()), "user": user_id, "tipo": tipo, "contenido": contenido[:1000]}
@@ -39,56 +38,46 @@ def leer_memoria_usuario(user_id, limite=6):
         return "\n".join(historial[-limite:])
     except: return ""
 
-# --- OCR AL MAXIMO ---
+# --- OCR V1011 OPTIMIZADO PARA RENDER ---
 def mejorar_imagen(data):
-    img = Image.open(io.BytesIO(data)).convert("RGB")
-    img = img.resize((img.width * 3, img.height * 3), Image.LANCZOS)
-    img = ImageOps.autocontrast(img, cutoff=2)
-    img = ImageEnhance.Contrast(img).enhance(2.0)
-    img = ImageEnhance.Sharpness(img).enhance(2.5)
+    img = Image.open(io.BytesIO(data)).convert("L") # Gris, no RGB = menos RAM
+    # Redimensionar inteligente, no x3
+    max_width = 1600
+    if img.width > max_width:
+        ratio = max_width / img.width
+        img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
+    elif img.width < 800:
+        # Solo agrandar si es muy pequeña
+        img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
+
+    img = ImageOps.autocontrast(img, cutoff=1)
+    img = ImageEnhance.Contrast(img).enhance(1.8)
     return img
 
 def ocr_maximo(data):
     try:
         img = mejorar_imagen(data)
-        resultados = []
-        for psm in [6, 3, 11, 4]:
+        for psm in [6, 3]: # solo 2 intentos, suficiente
             config = f'--oem 3 --psm {psm}'
             try:
-                t1 = pytesseract.image_to_string(img, lang='spa+eng', config=config)
-                if len(t1.strip()) > 15:
-                    resultados.append(t1.strip())
-                t2 = pytesseract.image_to_string(img, lang='spa', config=config)
-                if len(t2.strip()) > 15:
-                    resultados.append(t2.strip())
-            except: continue
-
-        if resultados:
-            # Devuelve el texto mas largo y completo
-            mejor = max(resultados, key=len)
-            if len(mejor) > 20:
-                return mejor
-
-        # Backup OCR.Space si tesseract fallo
-        try:
-            r = requests.post("https://api.ocr.space/parse/image", files={"file": ("img.jpg", data)}, data={"language": "spa", "OCREngine": 2}, timeout=30)
-            txt = r.json()["ParsedResults"][0]["ParsedText"]
-            if len(txt.strip()) > 15:
-                return txt.strip()
-        except: pass
-
+                t = pytesseract.image_to_string(img, lang='spa+eng', config=config)
+                if len(t.strip()) > 20:
+                    return t.strip()
+            except Exception as e:
+                print(f"OCR psm {psm} fallo: {e}")
+                continue
     except Exception as e:
         print(f"OCR MAX error: {e}")
     return None
 
 def consulta_groq_max(prompt, memoria=""):
-    system = f"Eres Geosat, una IA de Geologia y soporte tecnico de Cali, Colombia. Eres la version mas avanzada. Aprendes del usuario. Historial del usuario:\n{memoria}\nResponde de forma inteligente, util, directa, sin emotes."
+    system = f"Eres Geosat, IA de Geologia y soporte tecnico de Cali, Colombia. V1011. Historial:\n{memoria}\nResponde inteligente, util, directa."
     for model in MODELOS_TEXTO:
         try:
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                max_tokens=1500,
+                max_tokens=1200,
                 temperature=0.3
             )
             return resp.choices[0].message.content
@@ -97,37 +86,35 @@ def consulta_groq_max(prompt, memoria=""):
             continue
     return "Estoy en mantenimiento, pero ya guarde tu mensaje para aprender."
 
-# --- HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(m):
     guardar_memoria(m.from_user.id, "start", "/start")
-    bot.reply_to(m, "GEOSAT V1010 MAX LIVE.\nSoy tu IA geologica avanzada.\n- Leo fotos automaticamente al maximo.\n- Aprendo de cada conversacion.\n- Manda una foto de un afiche o escribe lo que necesites.")
+    bot.reply_to(m, "GEOSAT V1011 MAX LIVE ESTABLE.\n- Leo fotos sin caerme\n- Memoria activa\n- Manda foto o texto.")
 
 @bot.message_handler(content_types=['photo'])
 def foto(m):
     try:
         bot.send_chat_action(m.chat.id, 'typing')
-        file_info = bot.get_file(m.photo[-1].file_id)
+        # Usamos la foto mediana, no la mas grande, para no reventar RAM
+        file_id = m.photo[-2].file_id if len(m.photo) > 1 else m.photo[-1].file_id
+        file_info = bot.get_file(file_id)
         data = bot.download_file(file_info.file_path)
 
         texto_ocr = ocr_maximo(data)
 
         if not texto_ocr:
-            bot.reply_to(m, "Recibi la foto pero no pude extraer texto nitido. Si es un afiche, asegurate que este de frente y con luz. Ya guarde la imagen para mejorar.")
-            guardar_memoria(m.chat.id, "foto_fallo", "foto sin texto legible")
+            bot.reply_to(m, "Recibi la foto pero no pude extraer texto nitido. Mandala de frente con buena luz.")
             return
 
         guardar_memoria(m.chat.id, "foto_ocr", texto_ocr)
         memoria = leer_memoria_usuario(m.chat.id)
-
-        prompt = f"El usuario envio una foto. Este es el texto que extraje con OCR MAX:\n{texto_ocr}\n\nCaption del usuario: {m.caption or 'sin caption'}\n\nOrganiza la informacion de forma profesional, extrae datos clave como telefonos, titulos, instructores, empresas. No inventes."
+        prompt = f"Texto extraido del afiche con OCR:\n{texto_ocr}\n\nCaption: {m.caption or 'sin caption'}\n\nOrganiza la info profesional, extrae telefonos, titulos, empresas. No inventes."
         respuesta = consulta_groq_max(prompt, memoria)
-
         bot.reply_to(m, respuesta)
         guardar_memoria(m.chat.id, "respuesta_foto", respuesta)
-
     except Exception as e:
-        bot.reply_to(m, f"Error foto MAX: {e}")
+        print(f"Error foto: {e}")
+        bot.reply_to(m, "Error procesando la foto, pero ya reinicie el lector. Mandala de nuevo mas pequeña.")
 
 @bot.message_handler(func=lambda m: True)
 def texto(m):
@@ -143,7 +130,7 @@ def texto(m):
 
 @app.route('/')
 def health():
-    return f"V1010 MAX LIVE - Memoria: {os.path.exists(MEMORY_FILE)} - {datetime.datetime.now()}"
+    return f"V1011 MAX ESTABLE LIVE - {datetime.datetime.now()}"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -151,7 +138,7 @@ def run_flask():
 def run_bot():
     while True:
         try:
-            bot.infinity_polling(timeout=90, long_polling_timeout=90, skip_pending=True)
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
         except Exception as e:
             print(f"Polling error: {e}")
             time.sleep(5)
