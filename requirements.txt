@@ -4,4 +4,3 @@ python-dotenv
 Flask
 requests
 edge-tts
-duckduckgo-search
