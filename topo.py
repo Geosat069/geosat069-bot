@@ -512,7 +512,7 @@ TOOLS = [
     _tool("elevacion_punto", "Elevación aproximada (~90 m de resolución) de un punto WGS84.",
           {"latitud": _N, "longitud": _N}, ["latitud", "longitud"]),
     _tool("gsd_dron",
-          "GSD, altura de vuelo, huella de foto y fotos necesarias para un dron. Da altura_m o gsd_deseado_cm.",
+      "GSD, altura de vuelo, huella. Da altura_m o gsd_deseado_cm. IMPORTANTE: ancho_imagen_px es el PRIMER numero de WxH (ej 5472 de 5472x3648), alto_imagen_px es el segundo (3648).",
           {"ancho_sensor_mm": _N, "distancia_focal_mm": _N, "ancho_imagen_px": _N, "alto_imagen_px": _N,
            "altura_m": _N, "gsd_deseado_cm": _N, "area_ha": _N, "traslape_frontal": _N, "traslape_lateral": _N},
           ["ancho_sensor_mm", "distancia_focal_mm", "ancho_imagen_px", "alto_imagen_px"]),
