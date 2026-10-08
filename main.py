@@ -290,8 +290,13 @@ def webhook():
     except: pass
     return "ok",200
 def setup_webhook():
-    try: bot.remove_webhook()
-        if WEBHOOK_URL: bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-    except Exception as e: print(f"Webhook error: {e}")
+    try:
+        bot.remove_webhook()
+        if WEBHOOK_URL:
+            bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    except Exception as e:
+        print(f"Webhook error: {e}")
+
 setup_webhook()
-if __name__=="__main__": app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+if __name__=="__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
