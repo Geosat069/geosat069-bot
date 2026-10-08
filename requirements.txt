@@ -1,8 +1,5 @@
-python-telegram-bot>=21.6,<23
-groq>=1.0,<2
-requests>=2.31
-python-dotenv>=1.0
-flask>=3.0
-matplotlib>=3.8
-psycopg2-binary>=2.9
-tzdata
+pyTelegramBotAPI
+Flask
+gunicorn
+requests
+matplotlib
