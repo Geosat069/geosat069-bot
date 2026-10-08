@@ -1,302 +1,586 @@
-import os, json, datetime, requests, base64, io, re
-from flask import Flask, request
-import telebot
-from telebot.types import Update
-
-BOT_TOKEN=os.getenv("BOT_TOKEN")
-WEBHOOK_URL=os.getenv("WEBHOOK_URL")
-GROQ_API_KEY=os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY=os.getenv("GEMINI_API_KEY")
-MODELO=os.getenv("MODELO","openai/gpt-oss-120b")
-DATABASE_URL=os.getenv("DATABASE_URL")
-ALLOWED_USER_ID=int(os.getenv("ALLOWED_USER_ID",os.getenv("ALLOWED_USER_","7732665137")))
-LAT=float(os.getenv("LAT","3.4516"))
-LON=float(os.getenv("LON","-76.5320"))
-OPENWEATHER_KEY=os.getenv("OPENWEATHER_KEY")
-WEATHERAPI_KEY=os.getenv("WEATHERAPI_KEY")
-NASA_API_KEY=os.getenv("NASA_API_KEY")
-HF_TOKEN=os.getenv("HF_TOKEN")
-SERPER_API_KEY=os.getenv("SERPER_API_KEY")
-TAVILY_API_KEY=os.getenv("TAVILY_API_KEY")
-PLANTNET_API_KEY=os.getenv("PLANTNET_API_KEY")
-
-bot=telebot.TeleBot(BOT_TOKEN, threaded=False)
-app=Flask(__name__)
-os.makedirs("fotos", exist_ok=True)
-MEMORY_FILE="memoria.json"
-if not os.path.exists(MEMORY_FILE):
-    json.dump([], open(MEMORY_FILE,"w"))
-
-USE_DB=False
-try:
-    import psycopg2
-    if DATABASE_URL:
-        conn=psycopg2.connect(DATABASE_URL)
-        cur=conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS memoria (id SERIAL PRIMARY KEY, fecha TEXT, texto TEXT, tipo TEXT);")
-        cur.execute("CREATE TABLE IF NOT EXISTS costos (id SERIAL PRIMARY KEY, fecha TEXT, concepto TEXT, valor REAL);")
-        conn.commit(); cur.close(); conn.close()
-        USE_DB=True
-except: USE_DB=False
-
-def db_save(texto,tipo="nota"):
-    fecha=datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    try:
-        if USE_DB:
-            import psycopg2; conn=psycopg2.connect(DATABASE_URL); cur=conn.cursor()
-            cur.execute("INSERT INTO memoria (fecha,texto,tipo) VALUES (%s,%s,%s)",(fecha,texto,tipo))
-            conn.commit(); cur.close(); conn.close()
-        else:
-            mem=json.load(open(MEMORY_FILE)); mem.append(f"[{fecha}][{tipo}] {texto}"); json.dump(mem[-900:], open(MEMORY_FILE,"w"), indent=2, ensure_ascii=False)
-    except: pass
-
-def db_get_smart(limit=35, buscar=""):
-    try:
-        raw=[]
-        if USE_DB:
-            import psycopg2; conn=psycopg2.connect(DATABASE_URL); cur=conn.cursor()
-            cur.execute("SELECT fecha,texto FROM memoria ORDER BY id DESC LIMIT 300")
-            raw=[f"[{r[0]}] {r[1]}" for r in cur.fetchall()]; conn.close()
-        else: raw=json.load(open(MEMORY_FILE))[-300:]
-        if not buscar: return "\n".join(raw[-limit:])
-        q_tokens=re.findall(r'\w+', buscar.lower())
-        sinon={"trips":["trips","frankliniella","thrips","acaro","araña roja"],"botrytis":["botrytis","moho","pudricion","antracnosis"],"abono":["abono","fertil","urea","npk","cal"],"maracuya":["maracuya","passiflora","gulupa","lulo"]}
-        scored=[]
-        for line in raw:
-            l=line.lower(); score=0
-            for q in q_tokens:
-                if q in l: score+=3
-                for k,v in sinon.items():
-                    if q in v and any(x in l for x in v): score+=2
-            if score>0: scored.append((score,line))
-        scored.sort(key=lambda x:x[0], reverse=True)
-        return "\n".join([s[1] for s in scored[:limit]]) if scored else "\n".join(raw[-10:])
-    except: return "Sin memoria"
-
-CACHE={}
-def cached(key, fn, ttl=600):
-    now=datetime.datetime.now().timestamp()
-    if key in CACHE and now-CACHE[key][0]<ttl: return CACHE[key][1]
-    val=fn(); CACHE[key]=(now,val); return val
-
-def get_clima_real():
-    def fetch():
-        # INTENTO 1: WeatherAPI (nuevo, ultra estable)
-        try:
-            if WEATHERAPI_KEY:
-                u=f"http://api.weatherapi.com/v1/current.json?key={WEATHERAPI_KEY}&q={LAT},{LON}&lang=es"
-                r=requests.get(u, timeout=10).json()
-                if 'current' in r:
-                    cur=r['current']
-                    return {"temp":cur['temp_c'],"hum":cur['humidity'],"viento":cur['wind_kph'],"lluvia":cur.get('precip_mm',0),"suelo_hum":0.34,"suelo_sup":0.28,"et0":3.2,"prob":cur.get('cloud',88),"tmax":cur['temp_c'],"tmin":cur['temp_c']-6,"fuente":"WeatherAPI PRO"}
-        except: pass
-        # INTENTO 2: OpenMeteo + OpenWeather
-        try:
-            url=f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,soil_moisture_28_to_100cm,soil_moisture_0_to_7cm,et0_fao_evapotranspiration&daily=precipitation_probability_max&timezone=auto"
-            r=requests.get(url, timeout=12).json()
-            cur=r.get('current',{}); daily=r.get('daily',{})
-            if cur:
-                base={"temp":cur.get('temperature_2m',24.27),"hum":cur.get('relative_humidity_2m',87),"viento":cur.get('wind_speed_10m',5.81),"lluvia":cur.get('precipitation',0.79),"suelo_hum":cur.get('soil_moisture_28_to_100cm',0.34),"suelo_sup":cur.get('soil_moisture_0_to_7cm',0.28),"et0":cur.get('et0_fao_evapotranspiration',3.2),"prob":daily.get('precipitation_probability_max',[88])[0] if daily else 88,"tmax":24.27,"tmin":19,"fuente":"OpenMeteo PRO"}
-                if OPENWEATHER_KEY:
-                    try:
-                        u=f"https://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={OPENWEATHER_KEY}&units=metric&lang=es"
-                        ro=requests.get(u, timeout=8).json()
-                        if 'main' in ro: base.update({"temp":ro['main']['temp'],"hum":ro['main']['humidity'],"viento":ro['wind']['speed'],"fuente":"OW+OpenMeteo PRO"})
-                    except: pass
-                return base
-        except: pass
-        # CACHE FINAL - NUNCA 27C
-        return {"temp":24.27,"hum":87,"viento":5.81,"lluvia":0.79,"suelo_hum":0.34,"suelo_sup":0.28,"et0":3.2,"prob":88,"tmax":27,"tmin":19,"fuente":"Cache-PRO"}
-    return cached("clima", fetch, 300)
-
-def get_suelo_real():
-    def fetch():
-        # Intento 1 SoilGrids
-        try:
-            url=f"https://rest.isric.org/soilgrids/v2.0/properties/query?lon={LON}&lat={LAT}&property=phh2o&depth=0-5cm&value=mean"
-            r=requests.get(url, timeout=10).json()
-            ph=r['properties']['layers'][0]['depths'][0]['values']['mean']/10
-            if 4.5 < ph < 8.5:
-                return {"ph":ph,"texto":f"pH {ph:.1f} real SoilGrids"}
-        except: pass
-        # Intento 2 backup cientifico Cali - Franco arcilloso acido
-        return {"ph":6.1,"texto":"pH 6.1 Franco arcilloso 32% arcilla (SoilGrids backup Cali)"}
-    return cached("suelo", fetch, 86400)
-
-def get_luna():
-    now=datetime.datetime.now(); ref=datetime.datetime(2000,1,6); fase=((now-ref).days % 29.53)/29.53
-    if fase<0.25: return "🌑 Nueva - Siembra raiz, abona organico"
-    elif fase<0.5: return "🌓 Creciente - Siembra fruto maracuya, fertiliza N"
-    elif fase<0.75: return "🌕 Llena - Cosecha, max azucar, NO riegues"
-    else: return "🌗 Menguante - Poda, control plagas, herbicida"
-
-def get_precio_real(cultivo="maracuya"):
-    def fetch():
-        if TAVILY_API_KEY:
-            try:
-                url="https://api.tavily.com/search"
-                payload={"api_key":TAVILY_API_KEY,"query":f"precio {cultivo} kg SIPSA DANE hoy","search_depth":"basic","max_results":3}
-                r=requests.post(url, json=payload, timeout=10).json()
-                ans=r.get('answer','')
-                nums=re.findall(r'\$?(\d{1,3}[.,]\d{3})', ans)
-                loco=any(int(re.sub(r'[.,]','',n))>15000 for n in nums if re.sub(r'[.,]','',n).isdigit())
-                if not loco and len(ans)>15 and "60,000" not in ans:
-                    return f"{cultivo} TAVILY SIPSA: {ans[:280]}"
-            except: pass
-        precios={"maracuya":"$3800 Cavasa / $4250 Corabastos (SIPSA 05-oct real)","gulupa":"$5200","lulo":"$4800","tomate":"$2800"}
-        return precios.get(cultivo.lower(), f"{cultivo} $3800/$4250 SIPSA")
-    return cached(f"precio_{cultivo}", fetch, 1800)
-
-def get_clima_texto():
-    d=get_clima_real()
-    return f"{d['temp']}C Hum {d['hum']}% V {d['viento']}km/h Ll {d['lluvia']}mm Suelo100cm {d['suelo_hum']:.2f} ET0 {d['et0']}mm Prob {d['prob']}% [{d['fuente']}]"
-def get_ndvi():
-    d=get_clima_real(); ndvi=max(0.45,min(0.88,0.55+d['suelo_hum']*0.6)); estado="saludable ✅" if ndvi>0.70 else "estres ⚠️"
-    return f"NDVI {ndvi:.2f} {estado}"
-
-def analizar_foto_hf(path):
-    if HF_TOKEN:
-        try:
-            headers={"Authorization":f"Bearer {HF_TOKEN}"}; API_URL="https://api-inference.huggingface.co/models/linkanjarad/mobilenet_v2_1.0_224-plant-disease"
-            with open(path,"rb") as f: data=f.read()
-            r=requests.post(API_URL, headers=headers, data=data, timeout=22).json()
-            if isinstance(r,list) and r: return f"HF: {r[0]['label']} {r[0]['score']*100:.1f}%"
-        except: pass
-    return None
-
-SYSTEM_PROMPT="""Eres GEOSAT V13 ULTIMATE. Cali 3.4516,-76.5320. PhD agronomo tropical, edafologo, fitopatologo, economista SIPSA. MODELO 120b con razonamiento.
-
-REGLAS DE ORO:
-1) Si prob lluvia >70% => 🚨 NO FUMIGAR HOY, se lava. Riego 0mm.
-2) Riego = ET0*0.8. Si ET0 3.2mm => 2.5mm = 25m3/ha.
-3) pH: si <5.8 encala 500kg/ha dolomita, si >6.5 aplica azufre.
-4) Luna: usa para decidir siembra/poda/cosecha.
-5) SIEMPRE tabla TRIPLE DOSIS: | Producto | Dosis/Ha | Dosis/Bomba 20L | Costo COP/Ha | Carencia dias | Organico alternativo |
-6) Piensa paso a paso antes de responder (chain-of-thought interno) pero responde corto, con numeros, tabla y accion inmediata.
-7) Nunca digas 27C 65% generico, usa datos reales que te paso.
 """
+GEOSAT v2 - Asistente de topografía y geomática en Telegram (Groq + gpt-oss)
 
-MODELOS_FALLBACK=["openai/gpt-oss-120b","llama-3.3-70b-versatile","llama-3.1-8b-instant"]
-def elegir_modelo(pregunta):
-    q=pregunta.lower()
-    if len(q)<15 or "/id" in q or q.strip() in ["hola","gracias"]: return "llama-3.1-8b-instant"
-    if any(x in q for x in ["clima","suelo","luna","precio","panel"]): return "llama-3.3-70b-versatile"
-    return "openai/gpt-oss-120b"
+- Memoria persistente: Postgres externo (DATABASE_URL) o SQLite local si no hay.
+- Historial de conversación por chat y lecciones aprendidas (/corregir, /recordar).
+- Tools: cálculos topográficos exactos (topo.py), clima, hora, guardar recuerdos.
+- Acceso restringido a tu usuario de Telegram (ALLOWED_USER_ID).
+"""
+import asyncio
+import functools
+import io
+import json
+import logging
+import os
+import re
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-def llamar_groq(prompt_completo, modelo_preferido):
-    orden=[modelo_preferido]+[m for m in MODELOS_FALLBACK if m!=modelo_preferido]
-    for modelo in orden:
+import groq
+import requests
+from dotenv import load_dotenv
+from flask import Flask
+from groq import AsyncGroq
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+import topo  # herramientas de topografía (archivo topo.py)
+
+load_dotenv()
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
+log = logging.getLogger("geosat")
+logging.getLogger("httpx").setLevel(logging.WARNING)  # evita que el token salga en los logs
+
+# ---------------------------------------------------------------- configuración
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+MODELO = os.getenv("MODELO", "openai/gpt-oss-20b")
+ESFUERZO = os.getenv("REASONING_EFFORT", "low")  # low | medium | high
+ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0") or 0)
+NOMBRE = os.getenv("NOMBRE_USUARIO", "Jhon")
+LAT = float(os.getenv("LAT", "3.4516"))  # Cali por defecto
+LON = float(os.getenv("LON", "-76.5320"))
+ZONA = os.getenv("ZONA_HORARIA", "America/Bogota")
+
+DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+memoria = None  # se crean en main()
+cliente = None
+
+
+# ---------------------------------------------------------------------- memoria
+class Memoria:
+    """Hechos duraderos + historial. Postgres si hay DATABASE_URL; si no, SQLite."""
+
+    def __init__(self):
+        self.pg = bool(DATABASE_URL)
+        self.ph = "%s" if self.pg else "?"
+        if self.pg:
+            import psycopg2
+
+            self._psycopg2 = psycopg2
+        else:
+            os.makedirs("memoria", exist_ok=True)
+        self._crear_tablas()
+        log.info("Memoria lista (%s)", "Postgres" if self.pg else "SQLite local")
+
+    def _conectar(self):
+        if self.pg:
+            return self._psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        return sqlite3.connect("memoria/bot.db")
+
+    def _ejecutar(self, sql, params=(), leer=False):
+        con = self._conectar()
         try:
-            headers={"Authorization":f"Bearer {GROQ_API_KEY}","Content-Type":"application/json"}
-            payload={"model":modelo,"messages":[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":prompt_completo}],"temperature":0.35,"max_tokens":2800}
-            r=requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=55)
-            data=r.json()
-            if "choices" in data: return data["choices"][0]["message"]["content"]+f"\n\n_[{modelo}]_"
-        except: continue
-    return "Error Groq saturado, prueba /clima"
+            cur = con.cursor()
+            cur.execute(sql, params)
+            filas = cur.fetchall() if leer else None
+            con.commit()
+            return filas
+        finally:
+            con.close()
 
-def ask_groq(prompt, extra=""):
-    buscar=" ".join([w for w in prompt.split() if len(w)>3][:5])
-    memoria=db_get_smart(35,buscar); clima=get_clima_real(); suelo=get_suelo_real()
-    clima_txt=get_clima_texto(); ndvi=get_ndvi(); precio=get_precio_real(prompt[:18]); luna=get_luna()
-    alerta="🚨 NO FUMIGAR" if clima['prob']>75 else "✅ Fumiga 6am" if clima['prob']>45 else "✅ Dia seco"
-    riego=f"Riego hoy {clima['et0']*0.8:.1f}mm = {clima['et0']*0.8*10:.0f} m3/ha. Suelo sup {clima['suelo_sup']:.2f} prof {clima['suelo_hum']:.2f}"
-    suelo_calc=f"pH {suelo['ph']:.1f} - {'Encala 500kg/ha dolomita' if suelo['ph']<5.8 else 'Aplica MO 2kg/planta' if suelo['ph']>6.5 else 'pH optimo'}"
-    keys=f"OW:{'✅' if OPENWEATHER_KEY else '❌'} WAPI:{'✅' if WEATHERAPI_KEY else '❌'} TAV:{'✅' if TAVILY_API_KEY else '❌'} HF:{'✅' if HF_TOKEN else '❌'} DB:{'PG' if USE_DB else 'Local'}"
-    # Chain-of-thought forzado gratis
-    full=f"DATOS V13 REALES:\nCLIMA: {clima_txt}\n{riego}\nNDVI: {ndvi}\nSUELO: {suelo['texto']} {suelo_calc}\nLUNA: {luna}\nPRECIO: {precio}\nALERTA: {alerta} Prob {clima['prob']}%\n{keys}\nMEMORIA SMART:{memoria}\nEXTRA:{extra}\nPREGUNTA:{prompt}\n\nINSTRUCCION: Primero razona en 3 pasos: 1) Clima+prob lluvia 2) Suelo pH+riego 3) Accion. Luego responde final con tabla TRIPLE DOSIS si es plaga. Si prob>70% advierte NO fumigar."
-    modelo=elegir_modelo(prompt)
-    return llamar_groq(full, modelo)
+    def _crear_tablas(self):
+        pk = "SERIAL PRIMARY KEY" if self.pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        self._ejecutar(
+            f"CREATE TABLE IF NOT EXISTS hechos "
+            f"(id {pk}, texto TEXT NOT NULL, fecha TEXT NOT NULL)"
+        )
+        self._ejecutar(
+            f"CREATE TABLE IF NOT EXISTS mensajes "
+            f"(id {pk}, chat_id BIGINT NOT NULL, rol TEXT NOT NULL, "
+            f"contenido TEXT NOT NULL, fecha TEXT NOT NULL)"
+        )
 
-def ask_gemini(path, txt=""):
-    hf=analizar_foto_hf(path)
+    @staticmethod
+    def _ahora():
+        return datetime.now(timezone.utc).isoformat()
+
+    # --- hechos
+    def guardar_hecho(self, texto):
+        texto = (texto or "").strip()[:500]
+        if not texto:
+            return False
+        self._ejecutar(
+            f"INSERT INTO hechos (texto, fecha) VALUES ({self.ph}, {self.ph})",
+            (texto, self._ahora()),
+        )
+        return True
+
+    def buscar_hechos(self, consulta, n=5):
+        palabras = list(dict.fromkeys(re.findall(r"\w{4,}", consulta.lower())))[:8]
+        if not palabras:
+            return []
+        cond = " OR ".join([f"LOWER(texto) LIKE {self.ph}"] * len(palabras))
+        filas = self._ejecutar(
+            f"SELECT texto FROM hechos WHERE {cond} ORDER BY id DESC LIMIT {int(n)}",
+            tuple(f"%{p}%" for p in palabras),
+            leer=True,
+        )
+        return [f[0] for f in filas]
+
+    def ultimos_hechos(self, n=15):
+        return self._ejecutar(
+            f"SELECT id, texto FROM hechos ORDER BY id DESC LIMIT {int(n)}", leer=True
+        )
+
+    def borrar_hechos(self):
+        self._ejecutar("DELETE FROM hechos")
+
+    # --- historial
+    def guardar_mensaje(self, chat_id, rol, contenido):
+        self._ejecutar(
+            f"INSERT INTO mensajes (chat_id, rol, contenido, fecha) "
+            f"VALUES ({self.ph}, {self.ph}, {self.ph}, {self.ph})",
+            (chat_id, rol, contenido, self._ahora()),
+        )
+
+    def historial(self, chat_id, n=10):
+        filas = self._ejecutar(
+            f"SELECT rol, contenido FROM mensajes WHERE chat_id = {self.ph} "
+            f"ORDER BY id DESC LIMIT {int(n)}",
+            (chat_id,),
+            leer=True,
+        )
+        return [{"role": r, "content": c} for r, c in reversed(filas)]
+
+    def recortar_historial(self, chat_id, conservar=200):
+        self._ejecutar(
+            f"DELETE FROM mensajes WHERE chat_id = {self.ph} AND id NOT IN "
+            f"(SELECT id FROM mensajes WHERE chat_id = {self.ph} "
+            f"ORDER BY id DESC LIMIT {int(conservar)})",
+            (chat_id, chat_id),
+        )
+
+    def borrar_historial(self, chat_id):
+        self._ejecutar(f"DELETE FROM mensajes WHERE chat_id = {self.ph}", (chat_id,))
+
+
+# ------------------------------------------------------------------- herramientas
+def clima_actual(lat=None, lon=None):
+    lat = LAT if lat is None else lat
+    lon = LON if lon is None else lon
+    r = requests.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={
+            "latitude": lat,
+            "longitude": lon,
+            "current": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+            "timezone": "auto",
+            "forecast_days": 1,
+        },
+        timeout=10,
+    )
+    r.raise_for_status()
+    d = r.json()
+    c, dia = d["current"], d["daily"]
+    return (
+        f"Ahora: {c['temperature_2m']} °C, humedad {c['relative_humidity_2m']}%, "
+        f"viento {c['wind_speed_10m']} km/h. "
+        f"Hoy: mín {dia['temperature_2m_min'][0]} °C, máx {dia['temperature_2m_max'][0]} °C, "
+        f"prob. de lluvia {dia['precipitation_probability_max'][0]}%."
+    )
+
+
+def serie_temperatura_hoy():
+    r = requests.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={
+            "latitude": LAT,
+            "longitude": LON,
+            "hourly": "temperature_2m",
+            "timezone": "auto",
+            "forecast_days": 1,
+        },
+        timeout=10,
+    )
+    r.raise_for_status()
+    h = r.json()["hourly"]
+    return h["time"], h["temperature_2m"]
+
+
+def grafica_linea(titulo, etiquetas, valores):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
+    ax.plot(range(len(valores)), valores, marker="o", color="#d9480f")
+    paso = max(1, len(etiquetas) // 8)
+    idx = list(range(0, len(etiquetas), paso))
+    ax.set_xticks(idx)
+    ax.set_xticklabels([etiquetas[i] for i in idx])
+    ax.set_title(titulo)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def hora_actual():
+    ahora = datetime.now(ZoneInfo(ZONA))
+    return f"{DIAS[ahora.weekday()]} {ahora:%d/%m/%Y %H:%M} ({ZONA})"
+
+
+TOOLS_BASE = [
+    {
+        "type": "function",
+        "function": {
+            "name": "obtener_clima",
+            "description": "Clima actual y pronóstico de hoy. Sin argumentos usa la ubicación por defecto del usuario.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "latitud": {"type": "number"},
+                    "longitud": {"type": "number"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hora_actual",
+            "description": "Fecha y hora actuales del usuario.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "guardar_recuerdo",
+            "description": (
+                "Guarda un dato duradero e importante sobre el usuario o sus proyectos "
+                "(preferencias, datos de trabajo). No guardes cosas triviales ni "
+                "contraseñas, claves o datos sensibles."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "texto": {"type": "string", "description": "El dato, en una frase corta"}
+                },
+                "required": ["texto"],
+            },
+        },
+    },
+]
+
+
+TOOLS = TOOLS_BASE + topo.TOOLS
+
+
+async def ejecutar_tool(nombre, argumentos_json):
     try:
-        with open(path,"rb") as f: b64=base64.b64encode(f.read()).decode()
-        url=f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        clima=get_clima_texto(); ndvi=get_ndvi(); suelo=get_suelo_real(); luna=get_luna(); c=get_clima_real()
-        alerta=f"Prob {c['prob']}% {'NO FUMIGAR' if c['prob']>75 else 'Fumiga 6am'}" if c else ""
-        prompt=f"Eres GEOSAT V13. Foto {txt}. {hf or ''}. Clima {clima}. {ndvi}. Suelo {suelo['texto']} pH {suelo['ph']}. Luna {luna}. {alerta}. Razona 3 pasos y diagnostica % severidad, tabla triple dosis + costo COP + organico."
-        payload={"contents":[{"parts":[{"text":prompt},{"inline_data":{"mime_type":"image/jpeg","data":b64}}]}]}
-        r=requests.post(url, json=payload, timeout=60)
-        gem=r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return f"🔬 {hf}\n\n{gem}" if hf else gem
-    except Exception as e: return f"{hf}\nError Gemini: {e}" if hf else f"Error vision: {e}"
-
-def ok(m):
-    if m.from_user.id!=ALLOWED_USER_ID: bot.reply_to(m,f"⛔ ID {m.from_user.id}"); return False
-    return True
-
-@bot.message_handler(commands=['id'])
-def cmd_id(m):
-    c=get_clima_real(); suelo=get_suelo_real()
-    prob=c['prob']; alerta="🚨 NO FUMIGAR" if prob>75 else "✅"
-    bot.reply_to(m,f"🛰️ GEOSAT V13 ULTIMATE\nID:{m.from_user.id}\nMODELO:{MODELO} + CoT reasoning\nOW:{'✅' if OPENWEATHER_KEY else '❌'} WAPI:{'✅' if WEATHERAPI_KEY else '❌'} NASA:{'✅' if NASA_API_KEY else '❌'} HF:{'✅' if HF_TOKEN else '❌'} TAV:{'✅' if TAVILY_API_KEY else '❌'} PLANT:{'✅' if PLANTNET_API_KEY else '❌'}\nDB:{'PG' if USE_DB else 'Local'}\n{get_clima_texto()} {alerta}\n{get_ndvi()}\nSuelo: {suelo['texto']}\n{get_luna()}")
-
-@bot.message_handler(commands=['start','ayuda','clima','panel','suelo','luna','mercado','dosis','memoria'])
-def cmd_all(m):
-    if not ok(m): return
-    txt=m.text.lower()
-    if 'panel' in txt:
-        c=get_clima_real(); alerta="🚨 NO FUMIGAR HOY" if c['prob']>75 else "✅ Fumiga 6am"
-        bot.reply_to(m,f"📊 *PANEL V13 FINAL*\n{get_clima_texto()}\n{alerta}\n{get_ndvi()}\nSuelo {get_suelo_real()['texto']}\n{get_luna()}\n{get_precio_real('maracuya')}\nRiego hoy {c['et0']*0.8:.1f}mm", parse_mode="Markdown")
-    elif 'suelo' in txt:
-        s=get_suelo_real(); rec="Encala 500kg/ha dolomita" if s['ph']<5.8 else "pH optimo, aplica MO 2kg/planta"
-        bot.reply_to(m,f"🌱 {s['texto']}\n{rec}\nArcilla 32% tipico Cali - drenaje medio")
-    elif 'luna' in txt: bot.reply_to(m,f"{get_luna()}")
-    elif 'clima' in txt:
-        c=get_clima_real(); alerta="🚨 NO FUMIGUES - Prob "+str(c['prob'])+"%" if c['prob']>75 else ""
-        bot.reply_to(m,f"🌤️ {get_clima_texto()}\n{alerta}\n{get_ndvi()}")
-    elif 'mercado' in txt:
-        cultivo=m.text.replace('/mercado','').strip() or "maracuya"
-        bot.send_chat_action(m.chat.id,'typing')
-        precio=get_precio_real(cultivo); resp=ask_groq(f"Analiza venta {cultivo} hoy. Precio {precio}. Tabla vender vs esperar utilidad.", "Economista")
-        bot.reply_to(m,f"💰 {precio}\n\n{resp}"[:3800])
-    elif 'dosis' in txt:
-        prod=m.text.replace('/dosis','').strip() or "cipermetrina"
-        bot.send_chat_action(m.chat.id,'typing')
-        bot.reply_to(m, ask_groq(f"Calcula dosis triple exacta {prod} maracuya: Dosis/Ha, Dosis/Bomba20L, Costo COP/Ha, Carencia, pH agua ideal. Usa suelo {get_suelo_real()['ph']}. Tabla.")[:3800])
-    elif 'memoria' in txt:
-        buscar=m.text.replace('/memoria','').strip()
-        bot.reply_to(m,f"🧠 SMART:\n{db_get_smart(35,buscar)[:3800]}")
-    else:
-        bot.reply_to(m,f"🛰️ *V13 FINAL*\n{get_clima_texto()}\n{get_ndvi()}\n{get_suelo_real()['texto']}\n{get_luna()}\n/panel /clima /suelo /mercado /dosis", parse_mode="Markdown")
-
-@bot.message_handler(commands=['recordar','guardar'])
-def cmd_rec(m):
-    if not ok(m): return
-    txt=m.text.replace('/recordar','').replace('/guardar','').strip()
-    db_save(txt,"nota"); bot.reply_to(m,f"✅ Guardado V13: {txt[:200]}")
-
-@bot.message_handler(content_types=['photo'])
-def handle_foto(m):
-    if not ok(m): return
-    info=bot.get_file(m.photo[-1].file_id); data=bot.download_file(info.file_path)
-    path=f"fotos/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"; open(path,"wb").write(data)
-    bot.reply_to(m,"📸 V13 CoT analizando doble IA + pH real...")
-    bot.send_chat_action(m.chat.id,'typing')
-    bot.reply_to(m,f"{ask_gemini(path, m.caption or '')}"[:4000])
-
-@bot.message_handler(func=lambda m: True)
-def default(m):
-    if not ok(m): return
-    bot.send_chat_action(m.chat.id,'typing')
-    bot.reply_to(m, ask_groq(m.text)[:4000])
-
-@app.route('/')
-def index(): return f"V13 OK {MODELO} {get_clima_texto()}",200
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    try: bot.process_new_updates([Update.de_json(request.get_data().decode('utf-8'))])
-    except: pass
-    return "ok",200
-def setup_webhook():
+        args = json.loads(argumentos_json or "{}")
+    except json.JSONDecodeError:
+        args = {}
     try:
-        bot.remove_webhook()
-        if WEBHOOK_URL:
-            bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-    except Exception as e:
-        print(f"Webhook error: {e}")
+        if nombre in topo.FUNCIONES:
+            return await asyncio.to_thread(topo.ejecutar, nombre, args)
+        if nombre == "obtener_clima":
+            return await asyncio.to_thread(clima_actual, args.get("latitud"), args.get("longitud"))
+        if nombre == "hora_actual":
+            return hora_actual()
+        if nombre == "guardar_recuerdo":
+            ok = await asyncio.to_thread(memoria.guardar_hecho, args.get("texto", ""))
+            return "Guardado." if ok else "Texto vacío; no se guardó nada."
+        return f"Herramienta desconocida: {nombre}"
+    except Exception as e:  # el modelo recibe el error y puede explicarlo
+        log.exception("Error en tool %s", nombre)
+        return f"Error al ejecutar {nombre}: {e}"
 
-setup_webhook()
-if __name__=="__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+
+# --------------------------------------------------------------------------- IA
+def prompt_sistema(hechos):
+    recuerdos = "\n".join(f"- {h}" for h in hechos) if hechos else "(ninguno relevante)"
+    return (
+        f"Eres GEOSAT, asistente experto de {NOMBRE} en topografía, geomática, teledetección, "
+        "análisis de datos, drones, levantamientos topográficos, Civil 3D, AutoCAD, QGIS y Python. "
+        f"Fecha y hora actuales: {hora_actual()}.\n"
+        "Reglas:\n"
+        "- Responde en español, claro y corto (se lee en un celular). Texto plano: sin Markdown, "
+        "sin tablas, sin asteriscos. El código va tal cual, sin símbolos extra.\n"
+        "- Cálculos (coordenadas, distancias, azimuts, áreas, poligonales, niveles, GSD): usa SIEMPRE "
+        "las herramientas; nunca hagas cuentas de memoria.\n"
+        "- Si faltan datos (sistema de coordenadas, unidades, orden Este/Norte, zona), pregunta antes "
+        "de calcular e indica tus supuestos.\n"
+        "- Contexto Colombia: sistema oficial MAGNA-SIRGAS Origen Nacional (EPSG:9377). Para Cali, la "
+        "zona MAGNA es Oeste (EPSG:3115).\n"
+        "- Para Civil 3D, AutoCAD, QGIS y Python: da pasos o código concretos y breves, y avisa si no "
+        "estás seguro del nombre de un comando o menú.\n"
+        "- No inventes datos, normas ni valores; si no sabes, dilo.\n"
+        "- En decisiones de ingeniería, linderos o trabajos legales, recuerda que debe validarlas un "
+        "profesional con datos de campo.\n"
+        "- Si el usuario te corrige o te enseña algo duradero, guárdalo con guardar_recuerdo (una frase "
+        "corta). Nunca guardes claves ni datos sensibles.\n"
+        "- Da prioridad a los recuerdos que empiezan con CORRECCIÓN.\n"
+        f"Recuerdos relevantes sobre {NOMBRE}:\n{recuerdos}"
+    )
+
+
+async def responder(mensajes):
+    for _ in range(5):  # máximo 5 vueltas de herramientas
+        r = await cliente.chat.completions.create(
+            model=MODELO,
+            messages=mensajes,
+            tools=TOOLS,
+            tool_choice="auto",
+            temperature=0.3,
+            extra_body={"reasoning_effort": ESFUERZO},
+        )
+        msg = r.choices[0].message
+        if not msg.tool_calls:
+            return (msg.content or "").strip()
+        mensajes.append(
+            {
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ],
+            }
+        )
+        for tc in msg.tool_calls:
+            resultado = await ejecutar_tool(tc.function.name, tc.function.arguments)
+            mensajes.append({"role": "tool", "tool_call_id": tc.id, "content": resultado})
+    return "No pude completar la consulta con las herramientas."
+
+
+# ---------------------------------------------------------------------- Telegram
+def autorizado(update: Update) -> bool:
+    u = update.effective_user
+    return bool(u) and ALLOWED_USER_ID != 0 and u.id == ALLOWED_USER_ID
+
+
+def solo_yo(func):
+    @functools.wraps(func)
+    async def envoltura(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not autorizado(update):
+            uid = update.effective_user.id if update.effective_user else "?"
+            log.warning("Acceso denegado al usuario %s", uid)
+            return
+        await func(update, context)
+
+    return envoltura
+
+
+async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Sin restricción: sirve para descubrir tu ID y ponerlo en ALLOWED_USER_ID.
+    await update.message.reply_text(f"Tu ID de Telegram es: {update.effective_user.id}")
+
+
+@solo_yo
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "GEOSAT en línea: topografía, geomática, drones, Civil 3D, AutoCAD, QGIS y Python.\n"
+        "Escríbeme normal. Ejemplos:\n"
+        "- Convierte 3.4516, -76.5320 de WGS84 a Origen Nacional\n"
+        "- Distancia y azimut entre (1000,1000) y (1100,1180) en origen nacional\n"
+        "- GSD de un dron a 100 m, sensor 13.2 mm, focal 8.8 mm, 5472x3648\n"
+        "- Cómo hago una superficie TIN en Civil 3D\n\n"
+        "Comandos:\n"
+        "/sistemas - sistemas de coordenadas\n"
+        "/clima - clima de hoy\n"
+        "/grafica - temperatura de hoy (o /grafica 23.5 24 25)\n"
+        "/recordar <texto> - guardar un dato\n"
+        "/corregir <texto> - enseñarme una corrección\n"
+        "/memoria - ver lo guardado\n"
+        "/olvidar todo - borrar recuerdos\n"
+        "/reset - borrar el historial de la charla"
+    )
+
+
+@solo_yo
+async def cmd_sistemas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(topo.sistemas())
+
+
+@solo_yo
+async def cmd_corregir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = " ".join(context.args).strip()
+    if not texto:
+        await update.message.reply_text("Uso: /corregir <la corrección o lección correcta>")
+        return
+    await asyncio.to_thread(memoria.guardar_hecho, f"CORRECCIÓN: {texto}")
+    await update.message.reply_text("Aprendido. Lo tendré en cuenta en próximas respuestas.")
+
+
+@solo_yo
+async def cmd_clima(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text(await asyncio.to_thread(clima_actual))
+    except Exception:
+        log.exception("Error de clima")
+        await update.message.reply_text("No pude obtener el clima ahora.")
+
+
+@solo_yo
+async def cmd_grafica(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = " ".join(context.args)
+    try:
+        if args:
+            valores = [float(x) for x in re.split(r"[,\s;]+", args) if x]
+            if len(valores) < 2:
+                raise ValueError
+            buf = await asyncio.to_thread(
+                grafica_linea, "GEOSAT - Serie", [str(i + 1) for i in range(len(valores))], valores
+            )
+            pie = f"{len(valores)} datos"
+        else:
+            horas, temps = await asyncio.to_thread(serie_temperatura_hoy)
+            buf = await asyncio.to_thread(
+                grafica_linea, "Temperatura de hoy (°C)", [h[-5:] for h in horas], temps
+            )
+            pie = "Fuente: Open-Meteo"
+        await update.message.reply_photo(photo=buf, caption=pie)
+    except ValueError:
+        await update.message.reply_text(
+            "Uso: /grafica 23.5 24.1 25 (mínimo 2 números), o solo /grafica "
+            "para la temperatura de hoy."
+        )
+    except Exception:
+        log.exception("Error de gráfica")
+        await update.message.reply_text("No pude generar la gráfica.")
+
+
+@solo_yo
+async def cmd_recordar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = " ".join(context.args).strip()
+    if not texto:
+        await update.message.reply_text("Uso: /recordar <dato a guardar>")
+        return
+    await asyncio.to_thread(memoria.guardar_hecho, texto)
+    await update.message.reply_text("Guardado.")
+
+
+@solo_yo
+async def cmd_memoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    filas = await asyncio.to_thread(memoria.ultimos_hechos)
+    if not filas:
+        await update.message.reply_text("Aún no hay recuerdos guardados.")
+        return
+    await update.message.reply_text("Recuerdos (los más recientes):\n" + "\n".join(f"- {t}" for _, t in filas)[:4000])
+
+
+@solo_yo
+async def cmd_olvidar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if " ".join(context.args).strip().lower() != "todo":
+        await update.message.reply_text("Esto borra todos los recuerdos. Confirma con: /olvidar todo")
+        return
+    await asyncio.to_thread(memoria.borrar_hechos)
+    await update.message.reply_text("Recuerdos borrados.")
+
+
+@solo_yo
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await asyncio.to_thread(memoria.borrar_historial, update.effective_chat.id)
+    await update.message.reply_text("Historial de la conversación borrado.")
+
+
+@solo_yo
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    texto = update.message.text
+    await context.bot.send_chat_action(chat_id, "typing")
+    try:
+        hechos = await asyncio.to_thread(memoria.buscar_hechos, texto)
+        hist = await asyncio.to_thread(memoria.historial, chat_id, 8)
+        mensajes = (
+            [{"role": "system", "content": prompt_sistema(hechos)}]
+            + hist
+            + [{"role": "user", "content": texto}]
+        )
+        respuesta = await responder(mensajes)
+    except groq.RateLimitError:
+        await update.message.reply_text("Llegué al límite de Groq. Espera un minuto e intenta de nuevo.")
+        return
+    except Exception:
+        log.exception("Error al responder")
+        await update.message.reply_text("Tuve un problema al consultar el modelo. Intenta de nuevo.")
+        return
+
+    respuesta = respuesta or "No pude generar una respuesta."
+    await asyncio.to_thread(memoria.guardar_mensaje, chat_id, "user", texto)
+    await asyncio.to_thread(memoria.guardar_mensaje, chat_id, "assistant", respuesta)
+    await asyncio.to_thread(memoria.recortar_historial, chat_id)
+    for i in range(0, len(respuesta), 4000):
+        await update.message.reply_text(respuesta[i : i + 4000])
+
+
+async def al_error(update, context: ContextTypes.DEFAULT_TYPE):
+    log.error("Error no controlado", exc_info=context.error)
+
+
+# --------------------------------------------------------------------- keep-alive
+web = Flask(__name__)
+
+
+@web.route("/")
+def inicio():
+    return "GEOSAT vivo", 200
+
+
+def iniciar_web():
+    puerto = int(os.getenv("PORT", "10000"))  # Render define PORT
+    threading.Thread(
+        target=lambda: web.run(host="0.0.0.0", port=puerto), daemon=True
+    ).start()
+    log.info("Servidor keep-alive en el puerto %s", puerto)
+
+
+# ------------------------------------------------------------------------- inicio
+def main():
+    global memoria, cliente
+    faltan = [n for n, v in (("BOT_TOKEN", BOT_TOKEN), ("GROQ_API_KEY", GROQ_API_KEY)) if not v]
+    if faltan:
+        raise SystemExit(f"Faltan variables de entorno: {', '.join(faltan)}")
+    if ALLOWED_USER_ID == 0:
+        log.warning("ALLOWED_USER_ID no está definido: el bot solo responderá a /id")
+
+    memoria = Memoria()
+    cliente = AsyncGroq(api_key=GROQ_API_KEY)
+    iniciar_web()
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("id", cmd_id))
+    app.add_handler(CommandHandler(["start", "ayuda"], cmd_start))
+    app.add_handler(CommandHandler("sistemas", cmd_sistemas))
+    app.add_handler(CommandHandler("corregir", cmd_corregir))
+    app.add_handler(CommandHandler("clima", cmd_clima))
+    app.add_handler(CommandHandler("grafica", cmd_grafica))
+    app.add_handler(CommandHandler("recordar", cmd_recordar))
+    app.add_handler(CommandHandler("memoria", cmd_memoria))
+    app.add_handler(CommandHandler("olvidar", cmd_olvidar))
+    app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    app.add_error_handler(al_error)
+    log.info("GEOSAT iniciado")
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
