@@ -1,26 +1,16 @@
 """
-topo.py - Herramientas de topografía y geomática para GEOSAT.
-
-Cálculos exactos en Python puro (sin librerías pesadas). El modelo de IA decide
-qué herramienta usar; las cuentas las hace este código, no la IA.
-
-Sistemas soportados: WGS84 (4326), MAGNA-SIRGAS geográficas (4686),
-MAGNA-SIRGAS Origen Nacional (9377), zonas MAGNA Colombia (3114 a 3118) y UTM.
+topo.py - Herramientas de topografía y geomática para GEOSAT V2.1
+Cálculos exactos en Python puro + exportación CSV/KML/DXF gratis.
 """
 import math
 import re
 import unicodedata
-
 import requests
 
 WGS84 = (6378137.0, 1 / 298.257223563)
-GRS80 = (6378137.0, 1 / 298.257222101)  # elipsoide de MAGNA-SIRGAS
+GRS80 = (6378137.0, 1 / 298.257222101)
 
-
-# ------------------------------------------------- proyección transversa de Mercator
 class TM:
-    """Transversa de Mercator (series de Krüger, 4.º orden: precisión sub-milimétrica)."""
-
     def __init__(self, elipsoide, lat0, lon0, k0, fe, fn):
         a, f = elipsoide
         n = f / (2 - f)
@@ -62,7 +52,6 @@ class TM:
         return xi, eta
 
     def directa(self, lat, lon):
-        """(lat, lon en grados) -> (Este, Norte)"""
         xi, eta = self._xi_eta(math.radians(lat), math.radians(lon))
         return (
             self.fe + self.k0 * self.A * eta,
@@ -70,7 +59,6 @@ class TM:
         )
 
     def inversa(self, este, norte):
-        """(Este, Norte) -> (lat, lon en grados)"""
         xi = (norte - self.fn) / (self.k0 * self.A) + self.xi0
         eta = (este - self.fe) / (self.k0 * self.A)
         xi2, eta2 = xi, eta
@@ -84,8 +72,6 @@ class TM:
         lam = self.lon0 + math.atan2(math.sinh(eta2), math.cos(xi2))
         return math.degrees(phi), math.degrees(lam)
 
-
-# ------------------------------------------------------------- sistemas de coordenadas
 _LAT0_MAGNA = 4.59620041666667
 _ZONAS_MAGNA = {
     3114: ("MAGNA-SIRGAS / Zona Oeste-Oeste (EPSG:3114)", -80.0775079166667),
@@ -104,13 +90,11 @@ _ALIAS = {
 }
 _CACHE = {}
 
-
 def _normalizar(texto):
     t = unicodedata.normalize("NFD", str(texto).strip().lower())
-    t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
+    t = "".join(ch for ch in t if unicodedata.category(ch)!= "Mn")
     t = t.replace("epsg:", "").replace("epsg", "")
     return re.sub(r"[\s_\-/]+", " ", t).strip()
-
 
 def _sistema(nombre, lat=None, lon=None):
     n = _normalizar(nombre)
@@ -119,7 +103,7 @@ def _sistema(nombre, lat=None, lon=None):
             raise ValueError("'utm' automático solo sirve como sistema de destino.")
         zona = int((lon + 180) // 6) + 1
         n = f"utm {zona}{'n' if lat >= 0 else 's'}"
-    m = re.fullmatch(r"utm ?(\d{1,2}) ?([ns])", n)
+    m = re.fullmatch(r"utm?(\d{1,2})?([ns])", n)
     if m:
         zona, hem = int(m.group(1)), m.group(2)
         if not 1 <= zona <= 60:
@@ -131,7 +115,6 @@ def _sistema(nombre, lat=None, lon=None):
         codigo = int(n)
     else:
         raise ValueError(f"Sistema no reconocido: '{nombre}'. Usa /sistemas para ver los disponibles.")
-
     if codigo in _CACHE:
         return _CACHE[codigo]
     if codigo == 4326:
@@ -157,19 +140,15 @@ def _sistema(nombre, lat=None, lon=None):
     _CACHE[codigo] = s
     return s
 
-
 def _a_geo(sis, v1, v2):
-    """Entrada del sistema -> (lat, lon). Geográficas: (lat, lon); proyectadas: (Este, Norte)."""
     if sis["tipo"] == "geo":
         if abs(v1) > 90 or abs(v2) > 180:
             raise ValueError("Coordenadas geográficas fuera de rango: usa (latitud, longitud) en grados.")
         return v1, v2
     return sis["tm"].inversa(v1, v2)
 
-
 def _de_geo(sis, lat, lon):
     return (lat, lon) if sis["tipo"] == "geo" else sis["tm"].directa(lat, lon)
-
 
 def _aviso(sis, lon):
     if sis["tipo"] == "proy" and abs(lon - sis["lon0"]) > sis["limite"]:
@@ -177,8 +156,6 @@ def _aviso(sis, lon):
                 f"{sis['nombre']}; la distorsión puede ser grande.")
     return ""
 
-
-# --------------------------------------------------------------------- utilidades
 def _num(v):
     if isinstance(v, (int, float)):
         return float(v)
@@ -187,15 +164,12 @@ def _num(v):
         s = s.replace(",", ".")
     return float(s)
 
-
 def _par(p):
-    if not isinstance(p, (list, tuple)) or len(p) != 2:
+    if not isinstance(p, (list, tuple)) or len(p)!= 2:
         raise ValueError(f"Cada punto debe ser [valor_1, valor_2]; recibí {p}")
     return _num(p[0]), _num(p[1])
 
-
 def _a_decimal(v):
-    """Número, o texto en grados/minutos/segundos (76°31'55.2\"), a grados decimales."""
     if isinstance(v, (int, float)):
         return float(v)
     s = str(v).strip()
@@ -210,7 +184,6 @@ def _a_decimal(v):
     val = d + m / 60 + sg / 3600
     return -val if s.startswith("-") else val
 
-
 def _dms(grados):
     signo = "-" if grados < 0 else ""
     g = abs(grados)
@@ -223,7 +196,6 @@ def _dms(grados):
         m, d = 0, d + 1
     return f"{signo}{d}°{m:02d}'{s:05.2f}\""
 
-
 def _rumbo(az):
     if az < 90:
         return f"N {_dms(az)} E"
@@ -233,9 +205,7 @@ def _rumbo(az):
         return f"S {_dms(az - 180)} W"
     return f"N {_dms(360 - az)} W"
 
-
 def _geodesica(lat1, lon1, lat2, lon2):
-    """Problema inverso de Vincenty sobre WGS84: (distancia m, azimut A->B, azimut B->A)."""
     a, f = WGS84
     b = a * (1 - f)
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -252,13 +222,13 @@ def _geodesica(lat1, lon1, lat2, lon2):
         sigma = math.atan2(ss, cs)
         sa = cU1 * cU2 * sl / ss
         c2a = 1 - sa * sa
-        c2sm = cs - 2 * sU1 * sU2 / c2a if c2a != 0 else 0.0
+        c2sm = cs - 2 * sU1 * sU2 / c2a if c2a!= 0 else 0.0
         C = f / 16 * c2a * (4 + f * (4 - 3 * c2a))
         prev = lam
         lam = L + (1 - C) * f * sa * (sigma + C * ss * (c2sm + C * cs * (-1 + 2 * c2sm**2)))
         if abs(lam - prev) < 1e-12:
             break
-    else:  # no convergió (puntos casi antípodas): aproximación esférica
+    else:
         h = math.sin((phi2 - phi1) / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(L / 2) ** 2
         d = 2 * 6371008.8 * math.asin(math.sqrt(h))
         az = math.degrees(math.atan2(math.sin(L) * math.cos(phi2),
@@ -274,8 +244,6 @@ def _geodesica(lat1, lon1, lat2, lon2):
     az2 = math.degrees(math.atan2(cU1 * sl, -sU1 * cU2 + cU1 * sU2 * cl)) % 360
     return s, az1, (az2 + 180) % 360
 
-
-# ------------------------------------------------------------------ herramientas
 def sistemas():
     return (
         "Sistemas disponibles (nombre o EPSG):\n"
@@ -291,7 +259,6 @@ def sistemas():
         "Datums antiguos (Bogotá 1975, etc.) no están soportados."
     )
 
-
 def convertir_coordenadas(valor_1, valor_2, origen, destino):
     o = _sistema(origen)
     lat, lon = _a_geo(o, _num(valor_1), _num(valor_2))
@@ -303,7 +270,6 @@ def convertir_coordenadas(valor_1, valor_2, origen, destino):
     else:
         txt = f"Este {r1:.3f} m, Norte {r2:.3f} m\nSistema: {d['nombre']}"
     return txt + _aviso(d, lon)
-
 
 def distancia_azimut(punto_a, punto_b, sistema):
     s = _sistema(sistema)
@@ -322,7 +288,6 @@ def distancia_azimut(punto_a, punto_b, sistema):
             f"Azimut A->B: {az:.6f}° ({_dms(az)})\n"
             f"Contra-azimut B->A: {contra:.6f}° ({_dms(contra)})\n"
             f"Rumbo A->B: {_rumbo(az)}\nSistema: {s['nombre']}")
-
 
 def area_poligono(puntos, sistema):
     s = _sistema(sistema)
@@ -348,12 +313,11 @@ def area_poligono(puntos, sistema):
     return (f"Área: {area:,.2f} m² = {area / 10000:,.4f} ha ({area / 1e6:,.6f} km²)\n"
             f"Perímetro: {perim:,.3f} m\nVértices: {len(pts)}\n{nota}\nSistema: {s['nombre']}")
 
-
 def cierre_poligonal(este_inicial, norte_inicial, tramos):
     e0, n0 = _num(este_inicial), _num(norte_inicial)
     legs = []
     for t in tramos:
-        if not isinstance(t, (list, tuple)) or len(t) != 2:
+        if not isinstance(t, (list, tuple)) or len(t)!= 2:
             raise ValueError(f"Cada tramo debe ser [distancia, azimut]; recibí {t}")
         legs.append((_num(t[0]), _a_decimal(t[1])))
     if len(legs) < 3:
@@ -380,7 +344,6 @@ def cierre_poligonal(este_inicial, norte_inicial, tramos):
             f"Coordenadas ajustadas (método de Bowditch / brújula):\n" + "\n".join(lineas) +
             "\nCompara la precisión con la tolerancia de tu norma o contrato.")
 
-
 def cierre_angular(angulos, tipo="interior", precision_seg=10):
     if tipo not in ("interior", "exterior"):
         raise ValueError("tipo debe ser 'interior' o 'exterior'.")
@@ -398,7 +361,6 @@ def cierre_angular(angulos, tipo="interior", precision_seg=10):
             f"Tolerancia (a·√n con a={_num(precision_seg):g}\"): ±{tol:.1f}\" -> "
             f"{'CUMPLE' if abs(err_seg) <= tol else 'NO CUMPLE, repetir mediciones'}\n"
             f"Corrección por ángulo: {corr:+.2f}\"\nÁngulos corregidos: {corregidos}")
-
 
 def nivelacion(cota_inicial, lecturas, cota_final_conocida=None, distancia_km=None, mm_por_raiz_km=10):
     cota = _num(cota_inicial)
@@ -428,7 +390,6 @@ def nivelacion(cota_inicial, lecturas, cota_final_conocida=None, distancia_km=No
         salida.append(f"Estación {k}: VA {va:.3f}, VD {vd:.3f}, cota {c:.4f} -> {ajustada:.4f} m")
     return "\n".join(salida)
 
-
 def elevacion_punto(latitud, longitud):
     try:
         r = requests.get("https://api.open-meteo.com/v1/elevation",
@@ -440,7 +401,6 @@ def elevacion_punto(latitud, longitud):
     return (f"Elevación aproximada: {elev:.0f} m s. n. m. (modelo digital de ~90 m de resolución; "
             "sirve de referencia, NO para trabajos de ingeniería).")
 
-
 def gsd_dron(ancho_sensor_mm, distancia_focal_mm, ancho_imagen_px, alto_imagen_px,
              altura_m=None, gsd_deseado_cm=None, area_ha=None, traslape_frontal=0.8, traslape_lateral=0.7):
     sw, f = _num(ancho_sensor_mm), _num(distancia_focal_mm)
@@ -450,9 +410,9 @@ def gsd_dron(ancho_sensor_mm, distancia_focal_mm, ancho_imagen_px, alto_imagen_p
     if altura_m is None and gsd_deseado_cm is None:
         raise ValueError("Indica altura_m o gsd_deseado_cm.")
     h = _num(altura_m) if altura_m is not None else _num(gsd_deseado_cm) / 100 * f * wpx / sw
-    gsd = h * sw / (f * wpx)  # m/px
+    gsd = h * sw / (f * wpx)
     huella_w, huella_h = gsd * wpx, gsd * hpx
-    out = [f"Altura de vuelo: {h:.1f} m", f"GSD: {gsd * 100:.2f} cm/px",
+    out = [f"Altura de vuelo: {h:.1f} m", f"GSD: {gsd * 100:.2f} cm por pixel (≈{gsd:.4f} m/píxel)",
            f"Huella de cada foto: {huella_w:.1f} m (ancho) x {huella_h:.1f} m (alto)"]
     if area_ha is not None:
         fr, la = _num(traslape_frontal), _num(traslape_lateral)
@@ -466,18 +426,60 @@ def gsd_dron(ancho_sensor_mm, distancia_focal_mm, ancho_imagen_px, alto_imagen_p
     out.append("Verifica la normativa vigente de la Aerocivil y la altura máxima permitida antes de volar.")
     return "\n".join(out)
 
-
 def convertir_angulo(valor, a="decimal"):
     dec = _a_decimal(valor)
     return _dms(dec) if str(a).lower() == "dms" else f"{dec:.8f}°"
 
+# ----------------------------- FASE 2 - EXPORTACIÓN GRATIS CSV/KML/DXF
+def _a_wgs84_lista(puntos, sistema):
+    s = _sistema(sistema)
+    out = []
+    for p in puntos:
+        v1, v2 = _par(p)
+        lat, lon = _a_geo(s, v1, v2)
+        e, n = (v1, v2) if s["tipo"] == "proy" else _de_geo(_sistema("origen_nacional"), lat, lon)
+        out.append((e, n, lat, lon))
+    return out
 
-# ------------------------------------------------------- definición para el modelo
+def exportar_csv(puntos, sistema, nombre="poligono"):
+    s = _sistema(sistema)
+    datos = _a_wgs84_lista(puntos, sistema)
+    lineas = [f"ID,Este_{s['codigo']},Norte_{s['codigo']},Latitud_WGS84,Longitud_WGS84,Sistema"]
+    for i, (e, n, lat, lon) in enumerate(datos, 1):
+        lineas.append(f"{i},{e:.3f},{n:.3f},{lat:.8f},{lon:.8f},{s['nombre']}")
+    return "\n".join(lineas)
+
+def exportar_kml(puntos, sistema, nombre="GEOSAT_Poligono"):
+    datos = _a_wgs84_lista(puntos, sistema)
+    coords = "\n".join(f" {lon:.8f},{lat:.8f},0" for _, _, lat, lon in datos)
+    if datos:
+        coords += f"\n {datos[0][3]:.8f},{datos[0][2]:.8f},0"
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document><name>{nombre}</name>
+<Placemark><name>{nombre}</name>
+<Polygon><outerBoundaryIs><LinearRing><coordinates>
+{coords}
+</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark></Document></kml>"""
+
+def exportar_dxf(puntos, sistema, nombre="GEOSAT"):
+    pts = [_par(p) for p in puntos]
+    if pts[0]!= pts[-1]:
+        pts.append(pts[0])
+    entidades = ""
+    for i in range(len(pts)-1):
+        x1, y1 = pts[i]; x2, y2 = pts[i+1]
+        entidades += f"0\nLINE\n8\n{nombre}\n10\n{x1:.3f}\n20\n{y1:.3f}\n11\n{x2:.3f}\n21\n{y2:.3f}\n"
+    entidades += f"0\nLWPOLYLINE\n8\n{nombre}_POLY\n90\n{len(pts)}\n70\n1\n"
+    for x, y in pts:
+        entidades += f"10\n{x:.3f}\n20\n{y:.3f}\n"
+    return f"0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{entidades}0\nENDSEC\n0\nEOF\n"
+
 def _tool(nombre, descripcion, props, req=()):
     return {"type": "function", "function": {
         "name": nombre, "description": descripcion,
         "parameters": {"type": "object", "properties": props, "required": list(req)}}}
-
 
 _N = {"type": "number"}
 _S = {"type": "string"}
@@ -485,19 +487,16 @@ _PTO = {"type": "array", "items": _N, "description": "[valor_1, valor_2]"}
 
 TOOLS = [
     _tool("convertir_coordenadas",
-          "Convierte coordenadas entre sistemas. Geográficas: valor_1=latitud, valor_2=longitud. "
-          "Proyectadas: valor_1=Este, valor_2=Norte. Sistemas: wgs84, magna, origen_nacional, oeste, "
-          "bogota, este_central, este, utm_18n; 'utm' (solo destino) elige la zona.",
+          "Convierte coordenadas entre sistemas. Geográficas: valor_1=latitud, valor_2=longitud. Proyectadas: valor_1=Este, valor_2=Norte. Sistemas: wgs84, magna, origen_nacional, oeste, bogota, este_central, este, utm_18n; 'utm' (solo destino) elige la zona.",
           {"valor_1": _N, "valor_2": _N, "origen": _S, "destino": _S},
           ["valor_1", "valor_2", "origen", "destino"]),
     _tool("distancia_azimut",
-          "Distancia y azimut entre dos puntos. Geográficas [lat, lon]; proyectadas [Este, Norte].",
+          "Distancia y azimut entre dos puntos. Geográficas [lat, lon]; proyectadas [Este, Norte]. IMPORTANTE: ancho_imagen_px es el PRIMER numero de WxH (ej 5472 de 5472x3648), alto_imagen_px es el segundo.",
           {"punto_a": _PTO, "punto_b": _PTO, "sistema": _S}, ["punto_a", "punto_b", "sistema"]),
-    _tool("area_poligono", "Área y perímetro de un polígono. Puntos [[v1, v2], ...] en orden.",
+    _tool("area_poligono", "Área y perímetro de un polígono. Puntos [[v1, v2],...] en orden.",
           {"puntos": {"type": "array", "items": _PTO}, "sistema": _S}, ["puntos", "sistema"]),
     _tool("cierre_poligonal",
-          "Cierre y ajuste (Bowditch) de una poligonal cerrada. tramos: [[distancia_m, azimut], ...]; "
-          "azimut en grados decimales o texto DMS. El último tramo vuelve al punto inicial.",
+          "Cierre y ajuste (Bowditch) de una poligonal cerrada. tramos: [[distancia_m, azimut],...]; azimut en grados decimales o texto DMS.",
           {"este_inicial": _N, "norte_inicial": _N, "tramos": {"type": "array", "items": {"type": "array"}}},
           ["este_inicial", "norte_inicial", "tramos"]),
     _tool("cierre_angular",
@@ -505,20 +504,26 @@ TOOLS = [
           {"angulos": {"type": "array"}, "tipo": {"type": "string", "enum": ["interior", "exterior"]},
            "precision_seg": _N}, ["angulos"]),
     _tool("nivelacion",
-          "Nivelación geométrica. lecturas: [[vista_atras, vista_adelante], ...] por estación.",
+          "Nivelación geométrica. lecturas: [[vista_atras, vista_adelante],...] por estación.",
           {"cota_inicial": _N, "lecturas": {"type": "array", "items": {"type": "array"}},
            "cota_final_conocida": _N, "distancia_km": _N, "mm_por_raiz_km": _N},
           ["cota_inicial", "lecturas"]),
-    _tool("elevacion_punto", "Elevación aproximada (~90 m de resolución) de un punto WGS84.",
+    _tool("elevacion_punto", "Elevación aproximada (~90 m) de un punto WGS84.",
           {"latitud": _N, "longitud": _N}, ["latitud", "longitud"]),
     _tool("gsd_dron",
-      "GSD, altura de vuelo, huella. Da altura_m o gsd_deseado_cm. IMPORTANTE: ancho_imagen_px es el PRIMER numero de WxH (ej 5472 de 5472x3648), alto_imagen_px es el segundo (3648).",
+          "GSD, altura de vuelo, huella de foto. Da altura_m o gsd_deseado_cm. IMPORTANTE: ancho_imagen_px es el PRIMER numero de WxH (ej 5472 de 5472x3648), alto_imagen_px es el segundo (3648).",
           {"ancho_sensor_mm": _N, "distancia_focal_mm": _N, "ancho_imagen_px": _N, "alto_imagen_px": _N,
            "altura_m": _N, "gsd_deseado_cm": _N, "area_ha": _N, "traslape_frontal": _N, "traslape_lateral": _N},
           ["ancho_sensor_mm", "distancia_focal_mm", "ancho_imagen_px", "alto_imagen_px"]),
-    _tool("convertir_angulo", "Convierte un ángulo entre grados decimales y grados-minutos-segundos.",
-          {"valor": {"type": "string", "description": "ángulo como texto: 76.5 o 76°30'00\""}, "a": {"type": "string", "enum": ["decimal", "dms"]}},
+    _tool("convertir_angulo", "Convierte un ángulo entre grados decimales y DMS.",
+          {"valor": {"type": "string"}, "a": {"type": "string", "enum": ["decimal", "dms"]}},
           ["valor", "a"]),
+    _tool("exportar_csv", "Genera texto CSV con Este,Norte,Lat,Lon.",
+          {"puntos": {"type": "array"}, "sistema": _S, "nombre": _S}, ["puntos", "sistema"]),
+    _tool("exportar_kml", "Genera texto KML para Google Earth.",
+          {"puntos": {"type": "array"}, "sistema": _S, "nombre": _S}, ["puntos", "sistema"]),
+    _tool("exportar_dxf", "Genera texto DXF R12 para AutoCAD.",
+          {"puntos": {"type": "array"}, "sistema": _S, "nombre": _S}, ["puntos", "sistema"]),
 ]
 
 FUNCIONES = {
@@ -531,11 +536,12 @@ FUNCIONES = {
     "elevacion_punto": elevacion_punto,
     "gsd_dron": gsd_dron,
     "convertir_angulo": convertir_angulo,
+    "exportar_csv": exportar_csv,
+    "exportar_kml": exportar_kml,
+    "exportar_dxf": exportar_dxf,
 }
 
-
 def ejecutar(nombre, args):
-    """Ejecuta una herramienta y devuelve texto (nunca lanza errores de datos)."""
     fn = FUNCIONES.get(nombre)
     if fn is None:
         return f"Herramienta desconocida: {nombre}"
