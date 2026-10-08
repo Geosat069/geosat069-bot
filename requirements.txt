@@ -2,3 +2,5 @@ pyTelegramBotAPI
 Flask
 requests
 matplotlib
+psycopg2-binary
+python-dotenv
