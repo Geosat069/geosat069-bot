@@ -140,7 +140,6 @@ REGLAS:
 
 def ask_groq(prompt, extra=""):
     try:
-        # Búsqueda inteligente memoria
         buscar = prompt.split()[0] if prompt else ""
         if len(buscar) < 3: buscar = ""
         memoria = db_get(20, buscar) + "\n---\n" + db_get(10)
@@ -149,10 +148,16 @@ def ask_groq(prompt, extra=""):
         ndvi = get_ndvi_real()
         full = f"CLIMA: {clima}\nNDVI: {ndvi}\nMERCADO: {mercado}\nMEMORIA RELEVANTE filtro '{buscar}':\n{memoria}\nEXTRA: {extra}\nPREGUNTA: {prompt}"
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type":"application/json"}
-        payload={"model":MODELO,"messages":[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":full}],"temperature":0.6,"max_tokens":2000}
+        payload={
+            "model":MODELO,
+            "messages":[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":full}],
+            "temperature":0.6,
+            "max_tokens":2000,
+            "tool_choice": "none" # <-- ESTA LÍNEA ARREGLA TU ERROR
+        }
         r=requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=40)
         data=r.json()
-        return data["choices"][0]["message"]["content"] if "choices" in data else f"Error Groq: {str(data)[:500]}"
+        return data["choices"][0]["message"]["content"] if "choices" in data else f"Error Groq: {str(data)[:600]}"
     except Exception as e: return f"Error V7 cerebro: {e}"
 
 def ask_gemini(path, txt=""):
